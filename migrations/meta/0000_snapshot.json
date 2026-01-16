@@ -1,0 +1,887 @@
+{
+  "id": "ebcfe738-b9db-4b21-8af8-9415b7632c82",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.entries": {
+      "name": "entries",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "plan_id": {
+          "name": "plan_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "category": {
+          "name": "category",
+          "type": "entry_category",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "priority": {
+          "name": "priority",
+          "type": "priority",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "entries_plan_id_idx": {
+          "name": "entries_plan_id_idx",
+          "columns": [
+            {
+              "expression": "plan_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "entries_category_idx": {
+          "name": "entries_category_idx",
+          "columns": [
+            {
+              "expression": "plan_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "category",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "entries_plan_id_plans_id_fk": {
+          "name": "entries_plan_id_plans_id_fk",
+          "tableFrom": "entries",
+          "tableTo": "plans",
+          "columnsFrom": [
+            "plan_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "entries_select_own": {
+          "name": "entries_select_own",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": [
+            "public"
+          ],
+          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "entries_insert_own": {
+          "name": "entries_insert_own",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": [
+            "public"
+          ],
+          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "entries_update_own": {
+          "name": "entries_update_own",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": [
+            "public"
+          ],
+          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n",
+          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "entries_delete_own": {
+          "name": "entries_delete_own",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": [
+            "public"
+          ],
+          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        }
+      },
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
+    "public.messages": {
+      "name": "messages",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "plan_id": {
+          "name": "plan_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "type": {
+          "name": "type",
+          "type": "message_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'personal'"
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recipient_name": {
+          "name": "recipient_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "milestone_date": {
+          "name": "milestone_date",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "milestone_description": {
+          "name": "milestone_description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "messages_plan_id_idx": {
+          "name": "messages_plan_id_idx",
+          "columns": [
+            {
+              "expression": "plan_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "messages_type_idx": {
+          "name": "messages_type_idx",
+          "columns": [
+            {
+              "expression": "plan_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "messages_plan_id_plans_id_fk": {
+          "name": "messages_plan_id_plans_id_fk",
+          "tableFrom": "messages",
+          "tableTo": "plans",
+          "columnsFrom": [
+            "plan_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "messages_select_own": {
+          "name": "messages_select_own",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": [
+            "public"
+          ],
+          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "messages_insert_own": {
+          "name": "messages_insert_own",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": [
+            "public"
+          ],
+          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "messages_update_own": {
+          "name": "messages_update_own",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": [
+            "public"
+          ],
+          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n",
+          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "messages_delete_own": {
+          "name": "messages_delete_own",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": [
+            "public"
+          ],
+          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        }
+      },
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
+    "public.plans": {
+      "name": "plans",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'My Legacy Plan'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "plans_user_id_idx": {
+          "name": "plans_user_id_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "plans_user_id_users_id_fk": {
+          "name": "plans_user_id_users_id_fk",
+          "tableFrom": "plans",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "plans_select_own": {
+          "name": "plans_select_own",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": [
+            "public"
+          ],
+          "using": "\n  \"plans\".\"user_id\" = current_setting('app.user_id', true)\n"
+        },
+        "plans_insert_own": {
+          "name": "plans_insert_own",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": [
+            "public"
+          ],
+          "withCheck": "\n  \"plans\".\"user_id\" = current_setting('app.user_id', true)\n"
+        },
+        "plans_update_own": {
+          "name": "plans_update_own",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": [
+            "public"
+          ],
+          "using": "\n  \"plans\".\"user_id\" = current_setting('app.user_id', true)\n",
+          "withCheck": "\n  \"plans\".\"user_id\" = current_setting('app.user_id', true)\n"
+        },
+        "plans_delete_own": {
+          "name": "plans_delete_own",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": [
+            "public"
+          ],
+          "using": "\n  \"plans\".\"user_id\" = current_setting('app.user_id', true)\n"
+        }
+      },
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
+    "public.trusted_contacts": {
+      "name": "trusted_contacts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "plan_id": {
+          "name": "plan_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "first_name": {
+          "name": "first_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_name": {
+          "name": "last_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "phone": {
+          "name": "phone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "relationship": {
+          "name": "relationship",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "access_level",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'limited'"
+        },
+        "is_primary": {
+          "name": "is_primary",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "trusted_contacts_plan_id_idx": {
+          "name": "trusted_contacts_plan_id_idx",
+          "columns": [
+            {
+              "expression": "plan_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "trusted_contacts_plan_id_plans_id_fk": {
+          "name": "trusted_contacts_plan_id_plans_id_fk",
+          "tableFrom": "trusted_contacts",
+          "tableTo": "plans",
+          "columnsFrom": [
+            "plan_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "trusted_contacts_select_own": {
+          "name": "trusted_contacts_select_own",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": [
+            "public"
+          ],
+          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"trusted_contacts\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "trusted_contacts_insert_own": {
+          "name": "trusted_contacts_insert_own",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": [
+            "public"
+          ],
+          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"trusted_contacts\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "trusted_contacts_update_own": {
+          "name": "trusted_contacts_update_own",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": [
+            "public"
+          ],
+          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"trusted_contacts\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n",
+          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"trusted_contacts\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "trusted_contacts_delete_own": {
+          "name": "trusted_contacts_delete_own",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": [
+            "public"
+          ],
+          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"trusted_contacts\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        }
+      },
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
+    "public.users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "first_name": {
+          "name": "first_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_name": {
+          "name": "last_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "avatar_url": {
+          "name": "avatar_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "users_select_own": {
+          "name": "users_select_own",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": [
+            "public"
+          ],
+          "using": "\n  \"users\".\"id\" = current_setting('app.user_id', true)\n"
+        },
+        "users_update_own": {
+          "name": "users_update_own",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": [
+            "public"
+          ],
+          "using": "\n  \"users\".\"id\" = current_setting('app.user_id', true)\n",
+          "withCheck": "\n  \"users\".\"id\" = current_setting('app.user_id', true)\n"
+        }
+      },
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
+    "public.wishes": {
+      "name": "wishes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "plan_id": {
+          "name": "plan_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "category": {
+          "name": "category",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "wishes_plan_id_idx": {
+          "name": "wishes_plan_id_idx",
+          "columns": [
+            {
+              "expression": "plan_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "wishes_plan_id_plans_id_fk": {
+          "name": "wishes_plan_id_plans_id_fk",
+          "tableFrom": "wishes",
+          "tableTo": "plans",
+          "columnsFrom": [
+            "plan_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "wishes_select_own": {
+          "name": "wishes_select_own",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": [
+            "public"
+          ],
+          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "wishes_insert_own": {
+          "name": "wishes_insert_own",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": [
+            "public"
+          ],
+          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "wishes_update_own": {
+          "name": "wishes_update_own",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": [
+            "public"
+          ],
+          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n",
+          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "wishes_delete_own": {
+          "name": "wishes_delete_own",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": [
+            "public"
+          ],
+          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        }
+      },
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    }
+  },
+  "enums": {
+    "public.access_level": {
+      "name": "access_level",
+      "schema": "public",
+      "values": [
+        "full",
+        "limited",
+        "minimal"
+      ]
+    },
+    "public.entry_category": {
+      "name": "entry_category",
+      "schema": "public",
+      "values": [
+        "contact",
+        "financial",
+        "insurance",
+        "legal_document",
+        "home",
+        "digital_access"
+      ]
+    },
+    "public.message_type": {
+      "name": "message_type",
+      "schema": "public",
+      "values": [
+        "personal",
+        "reflection",
+        "milestone"
+      ]
+    },
+    "public.priority": {
+      "name": "priority",
+      "schema": "public",
+      "values": [
+        "primary",
+        "secondary",
+        "backup"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

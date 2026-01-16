@@ -1,0 +1,102 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```bash
+# Development
+npm run start:dev      # Start in watch mode
+npm run start:debug    # Start with debugger
+
+# Build
+npm run build          # Build with nest
+
+# Testing
+npm test               # Run unit tests
+npm test -- --watch    # Watch mode
+npm test -- <pattern>  # Run specific test file (e.g., npm test -- auth)
+npm run test:e2e       # Run e2e tests
+npm run test:cov       # Run with coverage
+
+# Linting/Formatting
+npm run lint           # ESLint with auto-fix
+npm run format         # Prettier
+
+# Database (Drizzle)
+npx drizzle-kit generate   # Generate migration from schema changes
+npx drizzle-kit push       # Push schema directly (dev only)
+npx drizzle-kit migrate    # Run migrations
+```
+
+## Code Generation
+
+**Always use the Nest CLI to generate modules, services, controllers, and other elements.**
+
+Structure convention: Each module gets its own directory in `src/`, but files within a module should be flat (not nested in subdirectories). Use `--flat` when generating elements into existing modules.
+
+```bash
+# Generate a new module (creates src/plans/plans.module.ts)
+npx nest g module plans
+
+# Generate into existing module with flat structure (note: module/name pattern)
+npx nest g service plans/plans --flat      # Creates src/plans/plans.service.ts
+npx nest g controller plans/plans --flat   # Creates src/plans/plans.controller.ts
+
+# Other common generators (into their respective module directories)
+npx nest g guard auth/auth --flat          # src/auth/auth.guard.ts
+npx nest g middleware auth/logging --flat  # src/auth/logging.middleware.ts
+npx nest g pipe plans/validation --flat    # src/plans/validation.pipe.ts
+npx nest g interceptor plans/transform --flat
+npx nest g filter common/http-exception --flat
+npx nest g decorator auth/roles --flat
+
+# Useful flags
+--dry-run    # Preview without writing files
+--skip-import # Don't auto-add to module
+```
+
+**Testing requirements:**
+- **Never use `--no-spec`** - Always generate test files with new modules/services/controllers
+- After generating new files, run `npm test` to verify the default tests pass
+- If a generated spec file fails, fix it immediately before continuing
+
+Available schematics: `module` (mo), `controller` (co), `service` (s), `guard` (gu), `middleware` (mi), `pipe` (pi), `interceptor` (itc), `filter` (f), `decorator` (d), `class` (cl), `interface` (itf), `resource` (res), `gateway` (ga), `resolver` (r)
+
+## Architecture
+
+**NestJS API** with Drizzle ORM targeting Neon Postgres with Row-Level Security (RLS).
+
+### Core Modules
+
+- **AppModule** (`src/app.module.ts`) - Root module with global ConfigModule using Zod validation
+- **ApiConfigModule** (`src/config/`) - Global typed configuration wrapper around NestJS ConfigService
+- **DbModule** (`src/db/`) - Global Drizzle ORM instance
+- **AuthModule** (`src/auth/`) - Authentication (Clerk integration planned)
+
+### Configuration
+
+Environment variables are validated at startup via Zod schema in `src/config.ts`. Use `ApiConfigService.get()` for type-safe config access.
+
+Required env vars: `DATABASE_URL`
+
+### Database Schema
+
+Schema defined in `src/schema.ts` using Drizzle. All tables use RLS policies that check `app.user_id` session variable.
+
+**Domain model (4 pillars):**
+1. **Entries** - Important information (contacts, financial, insurance, legal docs, home, digital access)
+2. **Wishes** - Personal preferences and guidance
+3. **Trusted Contacts** - Family access management with access levels
+4. **Messages** - Legacy messages (personal, reflections, milestones)
+
+**Key pattern:** All user data belongs to a `Plan`, which belongs to a `User`. RLS policies use `userOwnsPlan()` helper to check ownership via plan_id.
+
+### RLS Authentication Pattern
+
+For authenticated queries, set the user context before executing:
+```sql
+SET LOCAL app.user_id = 'clerk_user_id';
+```
+
+Migrations are in `./migrations/` directory.
