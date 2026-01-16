@@ -63,6 +63,30 @@ npx nest g decorator auth/roles --flat
 
 Available schematics: `module` (mo), `controller` (co), `service` (s), `guard` (gu), `middleware` (mi), `pipe` (pi), `interceptor` (itc), `filter` (f), `decorator` (d), `class` (cl), `interface` (itf), `resource` (res), `gateway` (ga), `resolver` (r)
 
+### DTO Validation
+
+Most endpoints accepting a JSON request body should use DTO validation. Modules with CRUD endpoints should have a `dto` subdirectory containing Zod-based DTOs.
+
+**Structure:** `src/<module>/dto/<name>.dto.ts`
+
+**Pattern:**
+```typescript
+import { createZodDto } from 'nestjs-zod';
+import { z } from 'zod';
+
+export const createPlanSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+});
+
+export class CreatePlanDto extends createZodDto(createPlanSchema) {}
+```
+
+**Naming conventions:**
+- File: `<name>.dto.ts` (e.g., `create-plan.dto.ts`, `update-plan.dto.ts`)
+- Schema: `<name>Schema` (e.g., `createPlanSchema`, `updatePlanSchema`)
+- Class: `<Name>Dto` (e.g., `CreatePlanDto`, `UpdatePlanDto`)
+
 ## Architecture
 
 **NestJS API** with Drizzle ORM targeting Neon Postgres with Row-Level Security (RLS).
