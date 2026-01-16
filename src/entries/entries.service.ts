@@ -54,7 +54,11 @@ export class EntriesService {
 
     const [updated] = await this.db.drizzle
       .update(entries)
-      .set({ ...updateEntryDto, metadata: updatedMetadata })
+      .set({
+        ...updateEntryDto,
+        metadata: updatedMetadata,
+        updatedAt: new Date(),
+      })
       .where(eq(entries.id, id))
       .returning();
 

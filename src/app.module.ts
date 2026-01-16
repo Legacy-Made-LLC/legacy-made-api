@@ -8,6 +8,7 @@ import { ApiConfigModule } from './config/api-config.module';
 import { DbModule } from './db/db.module';
 import { UsersModule } from './users/users.module';
 import { EntriesModule } from './entries/entries.module';
+import { PlansModule } from './plans/plans.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { EntriesModule } from './entries/entries.module';
     AuthModule,
     UsersModule,
     EntriesModule,
+    PlansModule,
   ],
   controllers: [],
   providers: [

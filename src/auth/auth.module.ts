@@ -1,12 +1,13 @@
-import { Module } from '@nestjs/common';
-import { AuthService } from './auth.service';
-import { AuthController } from './auth.controller';
-import { ApiConfigService } from 'src/config/api-config.service';
+import { Global, Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { AuthGuard } from './auth.guard';
-import { CLERK_CLIENT, createClerkClientFactory } from 'src/lib/clerk/client';
 import { ClsModule } from 'nestjs-cls';
+import { ApiConfigService } from 'src/config/api-config.service';
+import { CLERK_CLIENT, createClerkClientFactory } from 'src/lib/clerk/client';
+import { AuthController } from './auth.controller';
+import { AuthGuard } from './auth.guard';
+import { AuthService } from './auth.service';
 
+@Global()
 @Module({
   imports: [
     ClsModule.forRoot({
@@ -29,5 +30,6 @@ import { ClsModule } from 'nestjs-cls';
     },
   ],
   controllers: [AuthController],
+  exports: [ClsModule],
 })
 export class AuthModule {}
