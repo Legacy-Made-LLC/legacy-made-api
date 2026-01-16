@@ -87,6 +87,44 @@ export class CreatePlanDto extends createZodDto(createPlanSchema) {}
 - Schema: `<name>Schema` (e.g., `createPlanSchema`, `updatePlanSchema`)
 - Class: `<Name>Dto` (e.g., `CreatePlanDto`, `UpdatePlanDto`)
 
+**Discriminated unions:** `createZodDto()` does not support `z.discriminatedUnion()` due to a TypeScript limitation (TS2509 - cannot extend a union type). See [nestjs-zod#41](https://github.com/BenLorantfy/nestjs-zod/issues/41).
+
+Workaround - use a type alias and apply validation directly in the controller:
+```typescript
+// In DTO file
+export const createEntrySchema = z.discriminatedUnion('category', [...]);
+export type CreateEntryDto = z.infer<typeof createEntrySchema>;
+
+// In controller
+@Post()
+create(@Body(new ZodValidationPipe(createEntrySchema)) dto: CreateEntryDto) {
+  return this.service.create(dto);
+}
+```
+
+**Passing DTOs to Drizzle:** Pass validated DTOs directly to `.values()` and `.set()` methods. The Zod schema ensures the data shape matches the database schema, so manual attribute mapping is unnecessary:
+```typescript
+// Good - pass DTO directly
+async create(dto: CreatePlanDto) {
+  const [plan] = await this.db.drizzle.insert(plans).values(dto).returning();
+  return plan;
+}
+
+async update(id: string, dto: UpdatePlanDto) {
+  const [updated] = await this.db.drizzle.update(plans).set(dto).where(eq(plans.id, id)).returning();
+  return updated;
+}
+
+// Bad - manual mapping is superfluous
+async create(dto: CreatePlanDto) {
+  const [plan] = await this.db.drizzle.insert(plans).values({
+    name: dto.name,
+    description: dto.description,
+  }).returning();
+  return plan;
+}
+```
+
 ## Architecture
 
 **NestJS API** with Drizzle ORM targeting Neon Postgres with Row-Level Security (RLS).

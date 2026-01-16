@@ -7,6 +7,7 @@ import { configSchema } from './config';
 import { ApiConfigModule } from './config/api-config.module';
 import { DbModule } from './db/db.module';
 import { UsersModule } from './users/users.module';
+import { EntriesModule } from './entries/entries.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { UsersModule } from './users/users.module';
     DbModule,
     AuthModule,
     UsersModule,
+    EntriesModule,
   ],
   controllers: [],
   providers: [
