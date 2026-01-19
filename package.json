@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@clerk/express": "^1.7.62",
+    "@neondatabase/serverless": "^1.0.2",
     "@nestjs/common": "^11.1.12",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.1.12",
@@ -28,7 +29,6 @@
     "drizzle-orm": "^0.45.1",
     "nestjs-cls": "^6.2.0",
     "nestjs-zod": "^5.1.1",
-    "pg": "^8.17.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "zod": "^4.3.5"

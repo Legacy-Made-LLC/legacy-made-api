@@ -1,5 +1,6 @@
+import { neon } from '@neondatabase/serverless';
 import { Injectable } from '@nestjs/common';
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { drizzle } from 'drizzle-orm/neon-http';
 import { ApiConfigService } from 'src/config/api-config.service';
 
 @Injectable()
@@ -8,6 +9,7 @@ export class DbService {
 
   constructor(private readonly config: ApiConfigService) {
     const dbUrl = this.config.get('DATABASE_URL');
-    this.drizzle = drizzle(dbUrl);
+    const sql = neon(dbUrl);
+    this.drizzle = drizzle(sql);
   }
 }
