@@ -6,9 +6,10 @@ import { AuthModule } from './auth/auth.module';
 import { configSchema } from './config';
 import { ApiConfigModule } from './config/api-config.module';
 import { DbModule } from './db/db.module';
-import { UsersModule } from './users/users.module';
 import { EntriesModule } from './entries/entries.module';
+import { HealthModule } from './health/health.module';
 import { PlansModule } from './plans/plans.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -23,8 +24,8 @@ import { PlansModule } from './plans/plans.module';
     UsersModule,
     EntriesModule,
     PlansModule,
+    HealthModule,
   ],
-  controllers: [],
   providers: [
     {
       provide: APP_PIPE,
