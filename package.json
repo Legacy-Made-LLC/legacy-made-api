@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@clerk/express": "^1.7.62",
+    "@n8n/p-retry": "^6.2.0-2",
     "@neondatabase/serverless": "^1.0.2",
     "@nestjs/common": "^11.1.12",
     "@nestjs/config": "^4.0.2",

@@ -1,3 +1,5 @@
+import type { UserDeletedJSON, UserJSON } from '@clerk/express';
+import { verifyWebhook, type WebhookEvent } from '@clerk/express/webhooks';
 import {
   BadRequestException,
   Controller,
@@ -7,12 +9,10 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
-import { verifyWebhook, type WebhookEvent } from '@clerk/express/webhooks';
 import type { Request } from 'express';
-import { UsersService } from './users.service';
-import { ApiConfigService } from 'src/config/api-config.service';
-import type { UserJSON, UserDeletedJSON } from '@clerk/express';
 import { BypassJwtAuth } from 'src/auth/auth.guard';
+import { ApiConfigService } from 'src/config/api-config.service';
+import { UsersService } from './users.service';
 
 @Controller('users')
 export class UsersController {
