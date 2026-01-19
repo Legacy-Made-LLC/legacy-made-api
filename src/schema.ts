@@ -14,6 +14,7 @@
  */
 
 import { sql } from 'drizzle-orm';
+import { crudPolicy } from 'drizzle-orm/neon';
 import {
   type AnyPgColumn,
   boolean,
@@ -38,6 +39,9 @@ import {
  *
  * Expects `app.user_id` to be set via:
  *   SET LOCAL app.user_id = 'clerk_user_id';
+ *
+ * NOTE: Uses raw SQL string for table/column references to avoid circular
+ * initialization issues with drizzle-kit snapshot generation.
  */
 const userOwnsPlan = (planIdColumn: AnyPgColumn) => sql`
   EXISTS (
@@ -47,12 +51,36 @@ const userOwnsPlan = (planIdColumn: AnyPgColumn) => sql`
   )
 `;
 
+const userOwnsPlanPolicy = (planIdColumn: AnyPgColumn) =>
+  crudPolicy({
+    role: 'public',
+    read: userOwnsPlan(planIdColumn),
+    modify: userOwnsPlan(planIdColumn),
+  });
+
 /**
  * Direct user ownership check for tables with user_id column
+ * NOTE: Uses raw SQL string to avoid circular initialization issues
  */
-const isCurrentUser = (userIdColumn: AnyPgColumn) => sql`
-  ${userIdColumn} = current_setting('app.user_id', true)
-`;
+const isCurrentUser = (userIdColumn: AnyPgColumn) =>
+  sql`${userIdColumn} = current_setting('app.user_id', true)`;
+
+const isCurrentUserPolicy = (userIdColumn: AnyPgColumn) =>
+  crudPolicy({
+    role: 'public',
+    read: isCurrentUser(userIdColumn),
+    modify: isCurrentUser(userIdColumn),
+  });
+
+const shouldBypassRls = () =>
+  sql`'on' = current_setting('app.bypass_rls_status', true)`;
+
+const shouldBypassRlsPolicy = () => [
+  pgPolicy('bypass_rls_policy', {
+    to: 'public',
+    using: shouldBypassRls(),
+  }),
+];
 
 // =============================================================================
 // ENUMS
@@ -121,18 +149,7 @@ export const users = pgTable(
       .defaultNow()
       .notNull(),
   },
-  (table) => [
-    // RLS: Users can only read/update their own row
-    pgPolicy('users_select_own', {
-      for: 'select',
-      using: isCurrentUser(table.id),
-    }),
-    pgPolicy('users_update_own', {
-      for: 'update',
-      using: isCurrentUser(table.id),
-      withCheck: isCurrentUser(table.id),
-    }),
-  ],
+  (table) => [shouldBypassRlsPolicy(), isCurrentUserPolicy(table.id)],
 ).enableRLS();
 
 /**
@@ -149,6 +166,7 @@ export const plans = pgTable(
     id: uuid('id').defaultRandom().primaryKey(),
     userId: text('user_id')
       .notNull()
+      .default(sql`current_setting('app.user_id', true)`)
       .references(() => users.id, { onDelete: 'cascade' }),
     name: text('name').default('My Legacy Plan').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -160,24 +178,8 @@ export const plans = pgTable(
   },
   (table) => [
     index('plans_user_id_idx').on(table.userId),
-    // RLS: Users can only access their own plans
-    pgPolicy('plans_select_own', {
-      for: 'select',
-      using: isCurrentUser(table.userId),
-    }),
-    pgPolicy('plans_insert_own', {
-      for: 'insert',
-      withCheck: isCurrentUser(table.userId),
-    }),
-    pgPolicy('plans_update_own', {
-      for: 'update',
-      using: isCurrentUser(table.userId),
-      withCheck: isCurrentUser(table.userId),
-    }),
-    pgPolicy('plans_delete_own', {
-      for: 'delete',
-      using: isCurrentUser(table.userId),
-    }),
+    shouldBypassRlsPolicy(),
+    isCurrentUserPolicy(table.userId),
   ],
 ).enableRLS();
 
@@ -271,24 +273,8 @@ export const entries = pgTable(
   (table) => [
     index('entries_plan_id_idx').on(table.planId),
     index('entries_category_idx').on(table.planId, table.category),
-    // RLS: Users can only access entries in their plans
-    pgPolicy('entries_select_own', {
-      for: 'select',
-      using: userOwnsPlan(table.planId),
-    }),
-    pgPolicy('entries_insert_own', {
-      for: 'insert',
-      withCheck: userOwnsPlan(table.planId),
-    }),
-    pgPolicy('entries_update_own', {
-      for: 'update',
-      using: userOwnsPlan(table.planId),
-      withCheck: userOwnsPlan(table.planId),
-    }),
-    pgPolicy('entries_delete_own', {
-      for: 'delete',
-      using: userOwnsPlan(table.planId),
-    }),
+    shouldBypassRlsPolicy(),
+    userOwnsPlanPolicy(table.planId),
   ],
 ).enableRLS();
 
@@ -324,24 +310,8 @@ export const wishes = pgTable(
   },
   (table) => [
     index('wishes_plan_id_idx').on(table.planId),
-    // RLS
-    pgPolicy('wishes_select_own', {
-      for: 'select',
-      using: userOwnsPlan(table.planId),
-    }),
-    pgPolicy('wishes_insert_own', {
-      for: 'insert',
-      withCheck: userOwnsPlan(table.planId),
-    }),
-    pgPolicy('wishes_update_own', {
-      for: 'update',
-      using: userOwnsPlan(table.planId),
-      withCheck: userOwnsPlan(table.planId),
-    }),
-    pgPolicy('wishes_delete_own', {
-      for: 'delete',
-      using: userOwnsPlan(table.planId),
-    }),
+    shouldBypassRlsPolicy(),
+    userOwnsPlanPolicy(table.planId),
   ],
 ).enableRLS();
 
@@ -387,24 +357,8 @@ export const trustedContacts = pgTable(
   },
   (table) => [
     index('trusted_contacts_plan_id_idx').on(table.planId),
-    // RLS
-    pgPolicy('trusted_contacts_select_own', {
-      for: 'select',
-      using: userOwnsPlan(table.planId),
-    }),
-    pgPolicy('trusted_contacts_insert_own', {
-      for: 'insert',
-      withCheck: userOwnsPlan(table.planId),
-    }),
-    pgPolicy('trusted_contacts_update_own', {
-      for: 'update',
-      using: userOwnsPlan(table.planId),
-      withCheck: userOwnsPlan(table.planId),
-    }),
-    pgPolicy('trusted_contacts_delete_own', {
-      for: 'delete',
-      using: userOwnsPlan(table.planId),
-    }),
+    shouldBypassRlsPolicy(),
+    userOwnsPlanPolicy(table.planId),
   ],
 ).enableRLS();
 
@@ -449,24 +403,8 @@ export const messages = pgTable(
   (table) => [
     index('messages_plan_id_idx').on(table.planId),
     index('messages_type_idx').on(table.planId, table.type),
-    // RLS
-    pgPolicy('messages_select_own', {
-      for: 'select',
-      using: userOwnsPlan(table.planId),
-    }),
-    pgPolicy('messages_insert_own', {
-      for: 'insert',
-      withCheck: userOwnsPlan(table.planId),
-    }),
-    pgPolicy('messages_update_own', {
-      for: 'update',
-      using: userOwnsPlan(table.planId),
-      withCheck: userOwnsPlan(table.planId),
-    }),
-    pgPolicy('messages_delete_own', {
-      for: 'delete',
-      using: userOwnsPlan(table.planId),
-    }),
+    shouldBypassRlsPolicy(),
+    userOwnsPlanPolicy(table.planId),
   ],
 ).enableRLS();
 

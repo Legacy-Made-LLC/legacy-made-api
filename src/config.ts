@@ -5,7 +5,8 @@ export const configSchema = z.object({
   PORT: z.coerce.number().optional().default(3000),
 
   // DATABASE
-  DATABASE_URL: z.string(),
+  DATABASE_URL_APP: z.string(),
+  DATABASE_URL_MIGRATIONS: z.string(),
 
   // CORS
   CORS_ALLOWED_ORIGINS: z

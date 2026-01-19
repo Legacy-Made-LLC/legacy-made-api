@@ -1,10 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ClsService } from 'nestjs-cls';
 import type { Config } from 'src/config';
 import { ApiConfigService } from '../config/api-config.service';
 import { DbService } from './db.service';
 
 const mockConfig: Partial<Config> = {
-  DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
+  DATABASE_URL_APP: 'postgresql://test:test@localhost:5432/test',
 };
 
 describe('DbService', () => {
@@ -20,6 +21,13 @@ describe('DbService', () => {
             get: (key: keyof Config) => {
               return mockConfig[key];
             },
+          },
+        },
+        {
+          provide: ClsService,
+          useValue: {
+            get: jest.fn(),
+            set: jest.fn(),
           },
         },
       ],

@@ -19,8 +19,8 @@ import { UsersModule } from './users/users.module';
       validate: (env) => configSchema.parse(env),
     }),
     ApiConfigModule,
+    AuthModule, // Must come before DbModule for CLS to be available
     DbModule,
-    AuthModule,
     UsersModule,
     EntriesModule,
     PlansModule,

@@ -33,7 +33,7 @@ CREATE TABLE "messages" (
 ALTER TABLE "messages" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
 CREATE TABLE "plans" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"user_id" text NOT NULL,
+	"user_id" text DEFAULT current_setting('app.user_id', true) NOT NULL,
 	"name" text DEFAULT 'My Legacy Plan' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
@@ -91,21 +91,22 @@ CREATE INDEX "messages_type_idx" ON "messages" USING btree ("plan_id","type");--
 CREATE INDEX "plans_user_id_idx" ON "plans" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "trusted_contacts_plan_id_idx" ON "trusted_contacts" USING btree ("plan_id");--> statement-breakpoint
 CREATE INDEX "wishes_plan_id_idx" ON "wishes" USING btree ("plan_id");--> statement-breakpoint
-CREATE POLICY "entries_select_own" ON "entries" AS PERMISSIVE FOR SELECT TO public USING (
+CREATE POLICY "bypass_rls_policy" ON "entries" AS PERMISSIVE FOR ALL TO public USING ('on' = current_setting('app.bypass_rls_status', true));--> statement-breakpoint
+CREATE POLICY "crud-public-policy-select" ON "entries" AS PERMISSIVE FOR SELECT TO public USING (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "entries"."plan_id" 
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "entries_insert_own" ON "entries" AS PERMISSIVE FOR INSERT TO public WITH CHECK (
+CREATE POLICY "crud-public-policy-insert" ON "entries" AS PERMISSIVE FOR INSERT TO public WITH CHECK (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "entries"."plan_id" 
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "entries_update_own" ON "entries" AS PERMISSIVE FOR UPDATE TO public USING (
+CREATE POLICY "crud-public-policy-update" ON "entries" AS PERMISSIVE FOR UPDATE TO public USING (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "entries"."plan_id" 
@@ -118,28 +119,29 @@ CREATE POLICY "entries_update_own" ON "entries" AS PERMISSIVE FOR UPDATE TO publ
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "entries_delete_own" ON "entries" AS PERMISSIVE FOR DELETE TO public USING (
+CREATE POLICY "crud-public-policy-delete" ON "entries" AS PERMISSIVE FOR DELETE TO public USING (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "entries"."plan_id" 
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "messages_select_own" ON "messages" AS PERMISSIVE FOR SELECT TO public USING (
+CREATE POLICY "bypass_rls_policy" ON "messages" AS PERMISSIVE FOR ALL TO public USING ('on' = current_setting('app.bypass_rls_status', true));--> statement-breakpoint
+CREATE POLICY "crud-public-policy-select" ON "messages" AS PERMISSIVE FOR SELECT TO public USING (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "messages"."plan_id" 
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "messages_insert_own" ON "messages" AS PERMISSIVE FOR INSERT TO public WITH CHECK (
+CREATE POLICY "crud-public-policy-insert" ON "messages" AS PERMISSIVE FOR INSERT TO public WITH CHECK (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "messages"."plan_id" 
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "messages_update_own" ON "messages" AS PERMISSIVE FOR UPDATE TO public USING (
+CREATE POLICY "crud-public-policy-update" ON "messages" AS PERMISSIVE FOR UPDATE TO public USING (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "messages"."plan_id" 
@@ -152,42 +154,34 @@ CREATE POLICY "messages_update_own" ON "messages" AS PERMISSIVE FOR UPDATE TO pu
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "messages_delete_own" ON "messages" AS PERMISSIVE FOR DELETE TO public USING (
+CREATE POLICY "crud-public-policy-delete" ON "messages" AS PERMISSIVE FOR DELETE TO public USING (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "messages"."plan_id" 
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "plans_select_own" ON "plans" AS PERMISSIVE FOR SELECT TO public USING (
-  "plans"."user_id" = current_setting('app.user_id', true)
-);--> statement-breakpoint
-CREATE POLICY "plans_insert_own" ON "plans" AS PERMISSIVE FOR INSERT TO public WITH CHECK (
-  "plans"."user_id" = current_setting('app.user_id', true)
-);--> statement-breakpoint
-CREATE POLICY "plans_update_own" ON "plans" AS PERMISSIVE FOR UPDATE TO public USING (
-  "plans"."user_id" = current_setting('app.user_id', true)
-) WITH CHECK (
-  "plans"."user_id" = current_setting('app.user_id', true)
-);--> statement-breakpoint
-CREATE POLICY "plans_delete_own" ON "plans" AS PERMISSIVE FOR DELETE TO public USING (
-  "plans"."user_id" = current_setting('app.user_id', true)
-);--> statement-breakpoint
-CREATE POLICY "trusted_contacts_select_own" ON "trusted_contacts" AS PERMISSIVE FOR SELECT TO public USING (
+CREATE POLICY "bypass_rls_policy" ON "plans" AS PERMISSIVE FOR ALL TO public USING ('on' = current_setting('app.bypass_rls_status', true));--> statement-breakpoint
+CREATE POLICY "crud-public-policy-select" ON "plans" AS PERMISSIVE FOR SELECT TO public USING ("plans"."user_id" = current_setting('app.user_id', true));--> statement-breakpoint
+CREATE POLICY "crud-public-policy-insert" ON "plans" AS PERMISSIVE FOR INSERT TO public WITH CHECK ("plans"."user_id" = current_setting('app.user_id', true));--> statement-breakpoint
+CREATE POLICY "crud-public-policy-update" ON "plans" AS PERMISSIVE FOR UPDATE TO public USING ("plans"."user_id" = current_setting('app.user_id', true)) WITH CHECK ("plans"."user_id" = current_setting('app.user_id', true));--> statement-breakpoint
+CREATE POLICY "crud-public-policy-delete" ON "plans" AS PERMISSIVE FOR DELETE TO public USING ("plans"."user_id" = current_setting('app.user_id', true));--> statement-breakpoint
+CREATE POLICY "bypass_rls_policy" ON "trusted_contacts" AS PERMISSIVE FOR ALL TO public USING ('on' = current_setting('app.bypass_rls_status', true));--> statement-breakpoint
+CREATE POLICY "crud-public-policy-select" ON "trusted_contacts" AS PERMISSIVE FOR SELECT TO public USING (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "trusted_contacts"."plan_id" 
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "trusted_contacts_insert_own" ON "trusted_contacts" AS PERMISSIVE FOR INSERT TO public WITH CHECK (
+CREATE POLICY "crud-public-policy-insert" ON "trusted_contacts" AS PERMISSIVE FOR INSERT TO public WITH CHECK (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "trusted_contacts"."plan_id" 
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "trusted_contacts_update_own" ON "trusted_contacts" AS PERMISSIVE FOR UPDATE TO public USING (
+CREATE POLICY "crud-public-policy-update" ON "trusted_contacts" AS PERMISSIVE FOR UPDATE TO public USING (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "trusted_contacts"."plan_id" 
@@ -200,36 +194,34 @@ CREATE POLICY "trusted_contacts_update_own" ON "trusted_contacts" AS PERMISSIVE 
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "trusted_contacts_delete_own" ON "trusted_contacts" AS PERMISSIVE FOR DELETE TO public USING (
+CREATE POLICY "crud-public-policy-delete" ON "trusted_contacts" AS PERMISSIVE FOR DELETE TO public USING (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "trusted_contacts"."plan_id" 
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "users_select_own" ON "users" AS PERMISSIVE FOR SELECT TO public USING (
-  "users"."id" = current_setting('app.user_id', true)
-);--> statement-breakpoint
-CREATE POLICY "users_update_own" ON "users" AS PERMISSIVE FOR UPDATE TO public USING (
-  "users"."id" = current_setting('app.user_id', true)
-) WITH CHECK (
-  "users"."id" = current_setting('app.user_id', true)
-);--> statement-breakpoint
-CREATE POLICY "wishes_select_own" ON "wishes" AS PERMISSIVE FOR SELECT TO public USING (
+CREATE POLICY "bypass_rls_policy" ON "users" AS PERMISSIVE FOR ALL TO public USING ('on' = current_setting('app.bypass_rls_status', true));--> statement-breakpoint
+CREATE POLICY "crud-public-policy-select" ON "users" AS PERMISSIVE FOR SELECT TO public USING ("users"."id" = current_setting('app.user_id', true));--> statement-breakpoint
+CREATE POLICY "crud-public-policy-insert" ON "users" AS PERMISSIVE FOR INSERT TO public WITH CHECK ("users"."id" = current_setting('app.user_id', true));--> statement-breakpoint
+CREATE POLICY "crud-public-policy-update" ON "users" AS PERMISSIVE FOR UPDATE TO public USING ("users"."id" = current_setting('app.user_id', true)) WITH CHECK ("users"."id" = current_setting('app.user_id', true));--> statement-breakpoint
+CREATE POLICY "crud-public-policy-delete" ON "users" AS PERMISSIVE FOR DELETE TO public USING ("users"."id" = current_setting('app.user_id', true));--> statement-breakpoint
+CREATE POLICY "bypass_rls_policy" ON "wishes" AS PERMISSIVE FOR ALL TO public USING ('on' = current_setting('app.bypass_rls_status', true));--> statement-breakpoint
+CREATE POLICY "crud-public-policy-select" ON "wishes" AS PERMISSIVE FOR SELECT TO public USING (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "wishes"."plan_id" 
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "wishes_insert_own" ON "wishes" AS PERMISSIVE FOR INSERT TO public WITH CHECK (
+CREATE POLICY "crud-public-policy-insert" ON "wishes" AS PERMISSIVE FOR INSERT TO public WITH CHECK (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "wishes"."plan_id" 
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "wishes_update_own" ON "wishes" AS PERMISSIVE FOR UPDATE TO public USING (
+CREATE POLICY "crud-public-policy-update" ON "wishes" AS PERMISSIVE FOR UPDATE TO public USING (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "wishes"."plan_id" 
@@ -242,7 +234,7 @@ CREATE POLICY "wishes_update_own" ON "wishes" AS PERMISSIVE FOR UPDATE TO public
     AND plans.user_id = current_setting('app.user_id', true)
   )
 );--> statement-breakpoint
-CREATE POLICY "wishes_delete_own" ON "wishes" AS PERMISSIVE FOR DELETE TO public USING (
+CREATE POLICY "crud-public-policy-delete" ON "wishes" AS PERMISSIVE FOR DELETE TO public USING (
   EXISTS (
     SELECT 1 FROM plans 
     WHERE plans.id = "wishes"."plan_id" 
