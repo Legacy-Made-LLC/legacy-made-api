@@ -12,7 +12,7 @@ import {
 import { CreateEntryDto, FindEntriesQueryDto, UpdateEntryDto } from './dto';
 import { EntriesService } from './entries.service';
 
-@Controller()
+@Controller('plans/:planId/entries')
 export class EntriesController {
   constructor(private readonly entriesService: EntriesService) {}
 
@@ -20,7 +20,7 @@ export class EntriesController {
    * Create a new entry in a plan.
    * POST /plans/:planId/entries
    */
-  @Post('plans/:planId/entries')
+  @Post()
   create(
     @Param('planId', ParseUUIDPipe) planId: string,
     @Body() createEntryDto: CreateEntryDto,
@@ -33,7 +33,7 @@ export class EntriesController {
    * GET /plans/:planId/entries
    * GET /plans/:planId/entries?taskKey=some_task
    */
-  @Get('plans/:planId/entries')
+  @Get()
   findAll(
     @Param('planId', ParseUUIDPipe) planId: string,
     @Query() query: FindEntriesQueryDto,
@@ -43,9 +43,9 @@ export class EntriesController {
 
   /**
    * Get a single entry by ID.
-   * GET /entries/:id
+   * GET /:id
    */
-  @Get('entries/:id')
+  @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.entriesService.findOne(id);
   }
@@ -54,7 +54,7 @@ export class EntriesController {
    * Update an entry.
    * PATCH /entries/:id
    */
-  @Patch('entries/:id')
+  @Patch(':id')
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateEntryDto: UpdateEntryDto,
@@ -66,7 +66,7 @@ export class EntriesController {
    * Delete an entry.
    * DELETE /entries/:id
    */
-  @Delete('entries/:id')
+  @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.entriesService.remove(id);
   }

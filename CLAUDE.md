@@ -63,6 +63,44 @@ npx nest g decorator auth/roles --flat
 
 Available schematics: `module` (mo), `controller` (co), `service` (s), `guard` (gu), `middleware` (mi), `pipe` (pi), `interceptor` (itc), `filter` (f), `decorator` (d), `class` (cl), `interface` (itf), `resource` (res), `gateway` (ga), `resolver` (r)
 
+### Controller Routing
+
+Define base routes in the `@Controller()` decorator, not in individual endpoint decorators. Use relative paths in method decorators.
+
+```typescript
+// Good - base path in @Controller(), relative paths in methods
+@Controller('plans/:planId/entries')
+export class EntriesController {
+  @Post()
+  create(@Param('planId', ParseUUIDPipe) planId: string) {}
+
+  @Get()
+  findAll(@Param('planId', ParseUUIDPipe) planId: string) {}
+
+  @Get(':id')
+  findOne(@Param('id', ParseUUIDPipe) id: string) {}
+
+  @Patch(':id')
+  update(@Param('id', ParseUUIDPipe) id: string) {}
+
+  @Delete(':id')
+  remove(@Param('id', ParseUUIDPipe) id: string) {}
+}
+
+// Bad - repeating full paths in every decorator
+@Controller()
+export class EntriesController {
+  @Post('plans/:planId/entries')
+  create() {}
+
+  @Get('plans/:planId/entries')
+  findAll() {}
+
+  @Get('entries/:id')
+  findOne() {}
+}
+```
+
 ### DTO Validation
 
 Most endpoints accepting a JSON request body should use DTO validation. Modules with CRUD endpoints should have a `dto` subdirectory containing Zod-based DTOs.
@@ -143,8 +181,8 @@ async findAll(planId: string, query?: FindEntriesQueryDto) {
   });
 }
 
-// In controller
-@Get('plans/:planId/entries')
+// In controller (assumes @Controller('plans/:planId/entries'))
+@Get()
 findAll(
   @Param('planId', ParseUUIDPipe) planId: string,
   @Query() query: FindEntriesQueryDto,
