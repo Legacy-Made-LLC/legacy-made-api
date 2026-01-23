@@ -7,21 +7,19 @@
  * Structure:
  * - users: Synced from Clerk, owns plans
  * - plans: Container for all user data, future-proofed for sharing
- * - entries: Flexible storage for Important Information (Pillar 1)
- * - wishes: Wishes & Guidance (Pillar 2)
- * - trusted_contacts: Family Access management (Pillar 3)
- * - messages: Legacy Messages (Pillar 4)
+ * - entries: Generic storage for all entry types (taskKey determines type)
+ *
+ * Note: The frontend controls entry type definitions and metadata validation.
+ * The backend accepts generic entries identified by taskKey.
  */
 
 import { sql } from 'drizzle-orm';
 import { crudPolicy } from 'drizzle-orm/neon';
 import {
   type AnyPgColumn,
-  boolean,
   index,
   integer,
   jsonb,
-  pgEnum,
   pgPolicy,
   pgTable,
   text,
@@ -83,49 +81,6 @@ const shouldBypassRlsPolicy = () => [
 ];
 
 // =============================================================================
-// ENUMS
-// =============================================================================
-
-/**
- * Categories for entries in the Important Information pillar
- */
-export const entryCategoryEnum = pgEnum('entry_category', [
-  'contact', // Who to contact first
-  'financial', // Financial and account information
-  'insurance', // Insurance details
-  'legal_document', // Legal and identity documents (locations)
-  'home', // Home, vehicle, and ongoing responsibilities
-  'digital_access', // Digital access guidance
-]);
-
-/**
- * Priority levels for contacts and other entries
- */
-export const priorityEnum = pgEnum('priority', [
-  'primary',
-  'secondary',
-  'backup',
-]);
-
-/**
- * Access levels for trusted contacts (Pillar 3)
- */
-export const accessLevelEnum = pgEnum('access_level', [
-  'full', // Can see everything
-  'limited', // Can see most things, some restrictions
-  'minimal', // Only essential information
-]);
-
-/**
- * Message types for Legacy Messages (Pillar 4)
- */
-export const messageTypeEnum = pgEnum('message_type', [
-  'personal', // Personal messages to loved ones
-  'reflection', // Reflections on values, lessons, life
-  'milestone', // Messages for future milestones
-]);
-
-// =============================================================================
 // TABLES
 // =============================================================================
 
@@ -155,7 +110,11 @@ export const users = pgTable(
 /**
  * Plans table - container for all user data
  *
- * Each user has one plan (for now). This indirection allows:
+ * Each user can have multiple plans:
+ * - 'self' plan: for the account holder's own legacy
+ * - 'dependent' plan: managed on behalf of someone else (e.g., parent, grandparent)
+ *
+ * This indirection allows:
  * - Future sharing: multiple users can access one plan
  * - Clean RLS: all data tables reference plan_id, not user_id
  * - Logical grouping: "my legacy plan" as a concept
@@ -169,6 +128,8 @@ export const plans = pgTable(
       .default(sql`current_setting('app.user_id', true)`)
       .references(() => users.id, { onDelete: 'cascade' }),
     name: text('name').default('My Legacy Plan').notNull(),
+    planType: text('plan_type').default('self').notNull(), // 'self' | 'dependent'
+    forName: text('for_name'), // Name of person this plan is for (if dependent)
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -184,65 +145,15 @@ export const plans = pgTable(
 ).enableRLS();
 
 // =============================================================================
-// PILLAR 1: Important Information
+// ENTRIES
 // =============================================================================
 
 /**
- * Entries table - flexible storage for Important Information
+ * Entries table - generic storage for all entry types
  *
- * Uses a category enum + JSONB metadata pattern for flexibility.
- * Common fields are columns; category-specific data lives in metadata.
- *
- * Metadata shapes by category (enforced at app layer with Zod):
- *
- * contact: {
- *   firstName: string,
- *   lastName: string,
- *   relationship: string,
- *   phone?: string,
- *   email?: string,
- *   address?: string,
- *   reason?: string  // Why contact this person
- * }
- *
- * financial: {
- *   institution: string,
- *   accountType: string,
- *   accountNumber?: string (partial/masked),
- *   contactInfo?: string,
- *   notes?: string
- * }
- *
- * insurance: {
- *   provider: string,
- *   policyType: string,
- *   policyNumber?: string,
- *   contactInfo?: string,
- *   coverageDetails?: string
- * }
- *
- * legal_document: {
- *   documentType: string,
- *   location: string,  // Physical or digital location
- *   holder?: string,   // Attorney, safe deposit, etc.
- *   notes?: string
- * }
- *
- * home: {
- *   responsibilityType: string,  // mortgage, utilities, maintenance, etc.
- *   provider?: string,
- *   accountInfo?: string,
- *   frequency?: string,  // monthly, annual, etc.
- *   notes?: string
- * }
- *
- * digital_access: {
- *   service: string,
- *   username?: string,
- *   recoveryEmail?: string,
- *   notes?: string,
- *   // NOTE: Never store actual passwords - only hints/guidance
- * }
+ * The taskKey identifies the entry type (controlled by frontend).
+ * Metadata is a flexible JSONB field for type-specific data.
+ * The backend does not validate metadata structure beyond ensuring valid JSON.
  */
 export const entries = pgTable(
   'entries',
@@ -253,10 +164,9 @@ export const entries = pgTable(
       .references(() => plans.id, { onDelete: 'cascade' }),
 
     // Common fields
-    category: entryCategoryEnum('category').notNull(),
-    title: text('title').notNull(), // Display name / summary
-    notes: text('notes'), // General notes
-    priority: priorityEnum('priority'), // For contacts especially
+    taskKey: text('task_key').notNull(),
+    title: text('title'), // Display name / summary (optional)
+    notes: text('notes'), // General notes (optional)
     sortOrder: integer('sort_order').default(0).notNull(),
 
     // Category-specific data
@@ -272,137 +182,7 @@ export const entries = pgTable(
   },
   (table) => [
     index('entries_plan_id_idx').on(table.planId),
-    index('entries_category_idx').on(table.planId, table.category),
-    shouldBypassRlsPolicy(),
-    userOwnsPlanPolicy(table.planId),
-  ],
-).enableRLS();
-
-// =============================================================================
-// PILLAR 2: Wishes & Guidance
-// =============================================================================
-
-/**
- * Wishes table - personal preferences, guidance, and explanations
- *
- * Captures the "why" behind decisions and preferences.
- * More free-form than entries, focused on guidance and context.
- */
-export const wishes = pgTable(
-  'wishes',
-  {
-    id: uuid('id').defaultRandom().primaryKey(),
-    planId: uuid('plan_id')
-      .notNull()
-      .references(() => plans.id, { onDelete: 'cascade' }),
-
-    title: text('title').notNull(),
-    content: text('content').notNull(), // The actual wish/guidance
-    category: text('category'), // Optional categorization
-    sortOrder: integer('sort_order').default(0).notNull(),
-
-    createdAt: timestamp('created_at', { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => [
-    index('wishes_plan_id_idx').on(table.planId),
-    shouldBypassRlsPolicy(),
-    userOwnsPlanPolicy(table.planId),
-  ],
-).enableRLS();
-
-// =============================================================================
-// PILLAR 3: Family Access
-// =============================================================================
-
-/**
- * Trusted Contacts table - who can access the plan and at what level
- *
- * These are the people designated to receive access to the plan.
- * Different from "contact" entries - these are access grants, not directory entries.
- */
-export const trustedContacts = pgTable(
-  'trusted_contacts',
-  {
-    id: uuid('id').defaultRandom().primaryKey(),
-    planId: uuid('plan_id')
-      .notNull()
-      .references(() => plans.id, { onDelete: 'cascade' }),
-
-    // Contact info
-    firstName: text('first_name').notNull(),
-    lastName: text('last_name').notNull(),
-    email: text('email'),
-    phone: text('phone'),
-    relationship: text('relationship'), // Spouse, child, attorney, etc.
-
-    // Access configuration
-    accessLevel: accessLevelEnum('access_level').default('limited').notNull(),
-    isPrimary: boolean('is_primary').default(false).notNull(), // Primary point person
-
-    // Notes about this person's role
-    notes: text('notes'),
-    sortOrder: integer('sort_order').default(0).notNull(),
-
-    createdAt: timestamp('created_at', { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => [
-    index('trusted_contacts_plan_id_idx').on(table.planId),
-    shouldBypassRlsPolicy(),
-    userOwnsPlanPolicy(table.planId),
-  ],
-).enableRLS();
-
-// =============================================================================
-// PILLAR 4: Legacy Messages
-// =============================================================================
-
-/**
- * Messages table - personal messages, reflections, and milestone notes
- *
- * The emotional/meaningful content - voice, story, perspective.
- * Supports different types: personal to individuals, general reflections, future milestones.
- */
-export const messages = pgTable(
-  'messages',
-  {
-    id: uuid('id').defaultRandom().primaryKey(),
-    planId: uuid('plan_id')
-      .notNull()
-      .references(() => plans.id, { onDelete: 'cascade' }),
-
-    type: messageTypeEnum('type').default('personal').notNull(),
-    title: text('title').notNull(),
-    content: text('content').notNull(),
-
-    // For personal messages - who is it for?
-    recipientName: text('recipient_name'),
-
-    // For milestone messages - what's the occasion?
-    milestoneDate: timestamp('milestone_date', { withTimezone: true }),
-    milestoneDescription: text('milestone_description'),
-
-    sortOrder: integer('sort_order').default(0).notNull(),
-
-    createdAt: timestamp('created_at', { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => [
-    index('messages_plan_id_idx').on(table.planId),
-    index('messages_type_idx').on(table.planId, table.type),
+    index('entries_category_idx').on(table.planId, table.taskKey),
     shouldBypassRlsPolicy(),
     userOwnsPlanPolicy(table.planId),
   ],
@@ -420,15 +200,3 @@ export type NewPlan = typeof plans.$inferInsert;
 
 export type Entry = typeof entries.$inferSelect;
 export type NewEntry = typeof entries.$inferInsert;
-export type EntryCategory = (typeof entryCategoryEnum.enumValues)[number];
-
-export type Wish = typeof wishes.$inferSelect;
-export type NewWish = typeof wishes.$inferInsert;
-
-export type TrustedContact = typeof trustedContacts.$inferSelect;
-export type NewTrustedContact = typeof trustedContacts.$inferInsert;
-export type AccessLevel = (typeof accessLevelEnum.enumValues)[number];
-
-export type Message = typeof messages.$inferSelect;
-export type NewMessage = typeof messages.$inferInsert;
-export type MessageType = (typeof messageTypeEnum.enumValues)[number];

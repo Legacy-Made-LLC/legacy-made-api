@@ -1,8 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DbService, DrizzleTransaction } from '../db/db.service';
-import { entries, EntryCategory } from '../schema';
-import { CreateEntryDto, UpdateEntryDto } from './dto';
+import { entries } from '../schema';
+import { CreateEntryDto, FindEntriesQueryDto, UpdateEntryDto } from './dto';
 
 @Injectable()
 export class EntriesService {
@@ -12,36 +12,32 @@ export class EntriesService {
    * Create a new entry.
    * RLS policy ensures user can only create entries in their own plans.
    */
-  async create(createEntryDto: CreateEntryDto) {
+  async create(planId: string, createEntryDto: CreateEntryDto) {
     return this.db.rls(async (tx) => {
       const [entry] = await tx
         .insert(entries)
-        .values(createEntryDto)
+        .values({ ...createEntryDto, planId })
         .returning();
       return entry;
     });
   }
 
   /**
-   * Find all entries for a plan.
+   * Find entries for a plan, optionally filtered by query parameters.
    * RLS policy ensures only entries from user's plans are returned.
    */
-  async findAll(planId: string) {
+  async findAll(planId: string, query?: FindEntriesQueryDto) {
     return this.db.rls(async (tx) => {
-      return tx.select().from(entries).where(eq(entries.planId, planId));
-    });
-  }
+      const conditions = [eq(entries.planId, planId)];
 
-  /**
-   * Find entries by category.
-   * RLS policy ensures only entries from user's plans are returned.
-   */
-  async findByCategory(planId: string, category: EntryCategory) {
-    return this.db.rls(async (tx) => {
+      if (query?.taskKey) {
+        conditions.push(eq(entries.taskKey, query.taskKey));
+      }
+
       return tx
         .select()
         .from(entries)
-        .where(and(eq(entries.planId, planId), eq(entries.category, category)));
+        .where(and(...conditions));
     });
   }
 

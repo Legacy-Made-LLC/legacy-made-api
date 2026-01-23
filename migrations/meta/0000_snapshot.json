@@ -1,5 +1,5 @@
 {
-  "id": "b7ec92fb-8e6b-425a-9a86-a2dcba249433",
+  "id": "9c2964f1-9f13-450e-ad55-bd81bdb4f60c",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -21,10 +21,9 @@
           "primaryKey": false,
           "notNull": true
         },
-        "category": {
-          "name": "category",
-          "type": "entry_category",
-          "typeSchema": "public",
+        "task_key": {
+          "name": "task_key",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -32,18 +31,11 @@
           "name": "title",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "notes": {
           "name": "notes",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "priority": {
-          "name": "priority",
-          "type": "priority",
-          "typeSchema": "public",
           "primaryKey": false,
           "notNull": false
         },
@@ -102,7 +94,7 @@
               "nulls": "last"
             },
             {
-              "expression": "category",
+              "expression": "task_key",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -182,189 +174,6 @@
       "checkConstraints": {},
       "isRLSEnabled": true
     },
-    "public.messages": {
-      "name": "messages",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "plan_id": {
-          "name": "plan_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "type": {
-          "name": "type",
-          "type": "message_type",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'personal'"
-        },
-        "title": {
-          "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "content": {
-          "name": "content",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "recipient_name": {
-          "name": "recipient_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "milestone_date": {
-          "name": "milestone_date",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "milestone_description": {
-          "name": "milestone_description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sort_order": {
-          "name": "sort_order",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "messages_plan_id_idx": {
-          "name": "messages_plan_id_idx",
-          "columns": [
-            {
-              "expression": "plan_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "messages_type_idx": {
-          "name": "messages_type_idx",
-          "columns": [
-            {
-              "expression": "plan_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "type",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "messages_plan_id_plans_id_fk": {
-          "name": "messages_plan_id_plans_id_fk",
-          "tableFrom": "messages",
-          "tableTo": "plans",
-          "columnsFrom": [
-            "plan_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {
-        "bypass_rls_policy": {
-          "name": "bypass_rls_policy",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "'on' = current_setting('app.bypass_rls_status', true)"
-        },
-        "crud-public-policy-select": {
-          "name": "crud-public-policy-select",
-          "as": "PERMISSIVE",
-          "for": "SELECT",
-          "to": [
-            "public"
-          ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
-        },
-        "crud-public-policy-insert": {
-          "name": "crud-public-policy-insert",
-          "as": "PERMISSIVE",
-          "for": "INSERT",
-          "to": [
-            "public"
-          ],
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
-        },
-        "crud-public-policy-update": {
-          "name": "crud-public-policy-update",
-          "as": "PERMISSIVE",
-          "for": "UPDATE",
-          "to": [
-            "public"
-          ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n",
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
-        },
-        "crud-public-policy-delete": {
-          "name": "crud-public-policy-delete",
-          "as": "PERMISSIVE",
-          "for": "DELETE",
-          "to": [
-            "public"
-          ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
-        }
-      },
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
     "public.plans": {
       "name": "plans",
       "schema": "",
@@ -389,6 +198,19 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'My Legacy Plan'"
+        },
+        "plan_type": {
+          "name": "plan_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'self'"
+        },
+        "for_name": {
+          "name": "for_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -485,181 +307,6 @@
             "public"
           ],
           "using": "\"plans\".\"user_id\" = current_setting('app.user_id', true)"
-        }
-      },
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.trusted_contacts": {
-      "name": "trusted_contacts",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "plan_id": {
-          "name": "plan_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "first_name": {
-          "name": "first_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "last_name": {
-          "name": "last_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "email": {
-          "name": "email",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "phone": {
-          "name": "phone",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "relationship": {
-          "name": "relationship",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "access_level": {
-          "name": "access_level",
-          "type": "access_level",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'limited'"
-        },
-        "is_primary": {
-          "name": "is_primary",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "notes": {
-          "name": "notes",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sort_order": {
-          "name": "sort_order",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "trusted_contacts_plan_id_idx": {
-          "name": "trusted_contacts_plan_id_idx",
-          "columns": [
-            {
-              "expression": "plan_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "trusted_contacts_plan_id_plans_id_fk": {
-          "name": "trusted_contacts_plan_id_plans_id_fk",
-          "tableFrom": "trusted_contacts",
-          "tableTo": "plans",
-          "columnsFrom": [
-            "plan_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {
-        "bypass_rls_policy": {
-          "name": "bypass_rls_policy",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "'on' = current_setting('app.bypass_rls_status', true)"
-        },
-        "crud-public-policy-select": {
-          "name": "crud-public-policy-select",
-          "as": "PERMISSIVE",
-          "for": "SELECT",
-          "to": [
-            "public"
-          ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"trusted_contacts\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
-        },
-        "crud-public-policy-insert": {
-          "name": "crud-public-policy-insert",
-          "as": "PERMISSIVE",
-          "for": "INSERT",
-          "to": [
-            "public"
-          ],
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"trusted_contacts\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
-        },
-        "crud-public-policy-update": {
-          "name": "crud-public-policy-update",
-          "as": "PERMISSIVE",
-          "for": "UPDATE",
-          "to": [
-            "public"
-          ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"trusted_contacts\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n",
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"trusted_contacts\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
-        },
-        "crud-public-policy-delete": {
-          "name": "crud-public-policy-delete",
-          "as": "PERMISSIVE",
-          "for": "DELETE",
-          "to": [
-            "public"
-          ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"trusted_contacts\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
         }
       },
       "checkConstraints": {},
@@ -762,191 +409,9 @@
       },
       "checkConstraints": {},
       "isRLSEnabled": true
-    },
-    "public.wishes": {
-      "name": "wishes",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "plan_id": {
-          "name": "plan_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "title": {
-          "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "content": {
-          "name": "content",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "category": {
-          "name": "category",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sort_order": {
-          "name": "sort_order",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "wishes_plan_id_idx": {
-          "name": "wishes_plan_id_idx",
-          "columns": [
-            {
-              "expression": "plan_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "wishes_plan_id_plans_id_fk": {
-          "name": "wishes_plan_id_plans_id_fk",
-          "tableFrom": "wishes",
-          "tableTo": "plans",
-          "columnsFrom": [
-            "plan_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {
-        "bypass_rls_policy": {
-          "name": "bypass_rls_policy",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "'on' = current_setting('app.bypass_rls_status', true)"
-        },
-        "crud-public-policy-select": {
-          "name": "crud-public-policy-select",
-          "as": "PERMISSIVE",
-          "for": "SELECT",
-          "to": [
-            "public"
-          ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
-        },
-        "crud-public-policy-insert": {
-          "name": "crud-public-policy-insert",
-          "as": "PERMISSIVE",
-          "for": "INSERT",
-          "to": [
-            "public"
-          ],
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
-        },
-        "crud-public-policy-update": {
-          "name": "crud-public-policy-update",
-          "as": "PERMISSIVE",
-          "for": "UPDATE",
-          "to": [
-            "public"
-          ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n",
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
-        },
-        "crud-public-policy-delete": {
-          "name": "crud-public-policy-delete",
-          "as": "PERMISSIVE",
-          "for": "DELETE",
-          "to": [
-            "public"
-          ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
-        }
-      },
-      "checkConstraints": {},
-      "isRLSEnabled": true
     }
   },
-  "enums": {
-    "public.access_level": {
-      "name": "access_level",
-      "schema": "public",
-      "values": [
-        "full",
-        "limited",
-        "minimal"
-      ]
-    },
-    "public.entry_category": {
-      "name": "entry_category",
-      "schema": "public",
-      "values": [
-        "contact",
-        "financial",
-        "insurance",
-        "legal_document",
-        "home",
-        "digital_access"
-      ]
-    },
-    "public.message_type": {
-      "name": "message_type",
-      "schema": "public",
-      "values": [
-        "personal",
-        "reflection",
-        "milestone"
-      ]
-    },
-    "public.priority": {
-      "name": "priority",
-      "schema": "public",
-      "values": [
-        "primary",
-        "secondary",
-        "backup"
-      ]
-    }
-  },
+  "enums": {},
   "schemas": {},
   "sequences": {},
   "roles": {},

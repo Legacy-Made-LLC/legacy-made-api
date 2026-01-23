@@ -102,6 +102,57 @@ create(@Body(new ZodValidationPipe(createEntrySchema)) dto: CreateEntryDto) {
 }
 ```
 
+**Query Parameter DTOs:** Use the same pattern for validating query parameters. Create a DTO with a Zod schema and use it with the `@Query()` decorator:
+```typescript
+// In DTO file (e.g., list-entries-query.dto.ts)
+import { createZodDto } from 'nestjs-zod';
+import { z } from 'zod';
+
+export const listEntriesQuerySchema = z.object({
+  category: z.string().optional(),
+  limit: z.coerce.number().int().positive().optional(),
+  offset: z.coerce.number().int().nonnegative().optional(),
+});
+
+export class ListEntriesQueryDto extends createZodDto(listEntriesQuerySchema) {}
+
+// In controller
+@Get()
+findAll(@Query() query: ListEntriesQueryDto) {
+  return this.service.findAll(query);
+}
+```
+
+Note: Use `z.coerce.number()` for numeric query params since they arrive as strings.
+
+**Passing query DTOs to services:** Pass the query DTO to the service's `findAll` method. The query parameter should be optional so the method can be called without filters:
+```typescript
+// In service
+async findAll(planId: string, query?: FindEntriesQueryDto) {
+  return this.db.rls(async (tx) => {
+    const conditions = [eq(entries.planId, planId)];
+
+    if (query?.taskKey) {
+      conditions.push(eq(entries.taskKey, query.taskKey));
+    }
+
+    return tx
+      .select()
+      .from(entries)
+      .where(and(...conditions));
+  });
+}
+
+// In controller
+@Get('plans/:planId/entries')
+findAll(
+  @Param('planId', ParseUUIDPipe) planId: string,
+  @Query() query: FindEntriesQueryDto,
+) {
+  return this.service.findAll(planId, query);
+}
+```
+
 **Passing DTOs to Drizzle:** Pass validated DTOs directly to `.values()` and `.set()` methods. The Zod schema ensures the data shape matches the database schema, so manual attribute mapping is unnecessary:
 ```typescript
 // Good - pass DTO directly
