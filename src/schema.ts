@@ -189,6 +189,81 @@ export const entries = pgTable(
 ).enableRLS();
 
 // =============================================================================
+// FILES
+// =============================================================================
+
+/**
+ * Files table - stores metadata for uploaded files
+ *
+ * Files are attached to entries (e.g., a document scan for a will entry).
+ * Actual file storage is in Cloudflare R2 (documents, images, audio) or Mux (video).
+ *
+ * RLS policies ensure users can only access files belonging to their plans.
+ */
+export const files = pgTable(
+  'files',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    entryId: uuid('entry_id')
+      .notNull()
+      .references(() => entries.id, { onDelete: 'cascade' }),
+
+    // File metadata
+    filename: text('filename').notNull(),
+    mimeType: text('mime_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+
+    // Storage location
+    storageType: text('storage_type').notNull(), // 'r2' | 'mux'
+    storageKey: text('storage_key').notNull(), // R2 object key or Mux upload ID
+
+    // Upload status (for multipart/async uploads)
+    uploadStatus: text('upload_status').default('pending').notNull(), // 'pending' | 'uploading' | 'complete' | 'failed'
+
+    // Mux-specific fields (null for R2 files)
+    muxPlaybackId: text('mux_playback_id'),
+    muxAssetId: text('mux_asset_id'),
+
+    // Access control
+    accessLevel: text('access_level').default('private').notNull(), // 'private' | 'shareable'
+    shareToken: text('share_token'), // Unique token for shareable links
+    shareExpiresAt: timestamp('share_expires_at', { withTimezone: true }),
+
+    // Timestamps
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index('files_entry_id_idx').on(table.entryId),
+    index('files_share_token_idx').on(table.shareToken),
+    shouldBypassRlsPolicy(),
+    crudPolicy({
+      role: 'public',
+      read: sql`
+        EXISTS (
+          SELECT 1 FROM entries e
+          JOIN plans p ON p.id = e.plan_id
+          WHERE e.id = ${table.entryId}
+          AND p.user_id = current_setting('app.user_id', true)
+        )
+      `,
+      modify: sql`
+        EXISTS (
+          SELECT 1 FROM entries e
+          JOIN plans p ON p.id = e.plan_id
+          WHERE e.id = ${table.entryId}
+          AND p.user_id = current_setting('app.user_id', true)
+        )
+      `,
+    }),
+  ],
+).enableRLS();
+
+// =============================================================================
 // TYPE EXPORTS
 // =============================================================================
 
@@ -200,3 +275,6 @@ export type NewPlan = typeof plans.$inferInsert;
 
 export type Entry = typeof entries.$inferSelect;
 export type NewEntry = typeof entries.$inferInsert;
+
+export type File = typeof files.$inferSelect;
+export type NewFile = typeof files.$inferInsert;

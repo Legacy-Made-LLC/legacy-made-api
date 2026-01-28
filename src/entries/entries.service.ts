@@ -1,12 +1,21 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DbService, DrizzleTransaction } from '../db/db.service';
-import { entries } from '../schema';
-import { CreateEntryDto, FindEntriesQueryDto, UpdateEntryDto } from './dto';
+import { entries, Entry } from '../schema';
+import { FilesService } from '../files/files.service';
+import {
+  CreateEntryDto,
+  FindEntriesQueryDto,
+  UpdateEntryDto,
+  EntryResponseDto,
+} from './dto';
 
 @Injectable()
 export class EntriesService {
-  constructor(private readonly db: DbService) {}
+  constructor(
+    private readonly db: DbService,
+    private readonly filesService: FilesService,
+  ) {}
 
   /**
    * Create a new entry.
@@ -24,10 +33,15 @@ export class EntriesService {
 
   /**
    * Find entries for a plan, optionally filtered by query parameters.
+   * Includes files with presigned URLs for each entry.
    * RLS policy ensures only entries from user's plans are returned.
    */
-  async findAll(planId: string, query?: FindEntriesQueryDto) {
-    return this.db.rls(async (tx) => {
+  async findAll(
+    planId: string,
+    query?: FindEntriesQueryDto,
+  ): Promise<EntryResponseDto[]> {
+    // First, get the entries
+    const entryList = await this.db.rls(async (tx) => {
       const conditions = [eq(entries.planId, planId)];
 
       if (query?.taskKey) {
@@ -39,16 +53,41 @@ export class EntriesService {
         .from(entries)
         .where(and(...conditions));
     });
+
+    if (entryList.length === 0) {
+      return [];
+    }
+
+    // Batch fetch files for all entries
+    const entryIds = entryList.map((e) => e.id);
+    const allFiles = await this.filesService.findByEntryIds(entryIds);
+    const filesByEntry = this.groupBy(allFiles, 'entryId');
+
+    // Build responses with files
+    return Promise.all(
+      entryList.map(async (entry) => {
+        const entryFiles = filesByEntry[entry.id] || [];
+        const filesWithUrls =
+          await this.filesService.toFileResponses(entryFiles);
+        return this.toEntryResponse(entry, filesWithUrls);
+      }),
+    );
   }
 
   /**
-   * Find a single entry by ID.
+   * Find a single entry by ID with files included.
    * RLS policy ensures only entries from user's plans are visible.
    */
-  async findOne(id: string) {
-    return this.db.rls(async (tx) => {
+  async findOne(id: string): Promise<EntryResponseDto> {
+    const entry = await this.db.rls(async (tx) => {
       return this.findOneInTx(tx, id);
     });
+
+    // Fetch files for this entry
+    const fileList = await this.filesService.findAllForEntry(id);
+    const filesWithUrls = await this.filesService.toFileResponses(fileList);
+
+    return this.toEntryResponse(entry, filesWithUrls);
   }
 
   /**
@@ -101,5 +140,40 @@ export class EntriesService {
       await tx.delete(entries).where(eq(entries.id, id));
       return { deleted: true };
     });
+  }
+
+  /**
+   * Convert entry to response DTO with files.
+   */
+  private toEntryResponse(
+    entry: Entry,
+    files: Awaited<ReturnType<FilesService['toFileResponses']>>,
+  ): EntryResponseDto {
+    return {
+      id: entry.id,
+      planId: entry.planId,
+      taskKey: entry.taskKey,
+      title: entry.title,
+      notes: entry.notes,
+      sortOrder: entry.sortOrder,
+      metadata: entry.metadata as Record<string, unknown>,
+      files,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+    };
+  }
+
+  /**
+   * Group array items by a key.
+   */
+  private groupBy<T>(arr: T[], key: keyof T): Record<string, T[]> {
+    return arr.reduce(
+      (acc, item) => {
+        const k = String(item[key]);
+        (acc[k] = acc[k] || []).push(item);
+        return acc;
+      },
+      {} as Record<string, T[]>,
+    );
   }
 }

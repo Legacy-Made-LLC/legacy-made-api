@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { EntriesService } from './entries.service';
 import { DbService } from '../db/db.service';
+import { FilesService } from '../files/files.service';
 
 describe('EntriesService', () => {
   let service: EntriesService;
@@ -19,6 +20,12 @@ describe('EntriesService', () => {
     },
   };
 
+  const mockFilesService = {
+    findByEntryIds: jest.fn().mockResolvedValue([]),
+    findAllForEntry: jest.fn().mockResolvedValue([]),
+    toFileResponses: jest.fn().mockResolvedValue([]),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -26,6 +33,10 @@ describe('EntriesService', () => {
         {
           provide: DbService,
           useValue: mockDbService,
+        },
+        {
+          provide: FilesService,
+          useValue: mockFilesService,
         },
       ],
     }).compile();

@@ -10,6 +10,7 @@ import { EntriesModule } from './entries/entries.module';
 import { HealthModule } from './health/health.module';
 import { PlansModule } from './plans/plans.module';
 import { UsersModule } from './users/users.module';
+import { FilesModule } from './files/files.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { UsersModule } from './users/users.module';
     EntriesModule,
     PlansModule,
     HealthModule,
+    FilesModule,
   ],
   providers: [
     {
