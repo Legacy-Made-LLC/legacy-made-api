@@ -231,6 +231,81 @@ Environment variables are validated at startup via Zod schema in `src/config.ts`
 
 Required env vars: `DATABASE_URL`
 
+### Dev Auth Bypass (for curl/API testing)
+
+When `DEV_AUTH_USER_ID` is set in your environment, you can bypass Clerk JWT authentication by sending an `X-Dev-User-Id` header with any user ID:
+
+```bash
+# In .env
+DEV_AUTH_USER_ID=enabled   # Any truthy value enables the feature
+
+# curl examples
+curl -H "X-Dev-User-Id: user_2abc123" http://localhost:3000/plans
+curl -X POST -H "X-Dev-User-Id: user_2abc123" -H "Content-Type: application/json" \
+  -d '{"name": "Test Plan"}' http://localhost:3000/plans
+```
+
+The header value becomes the authenticated user ID for RLS queries. This feature only works when `DEV_AUTH_USER_ID` is configured - never set this in production.
+
+### Service Configuration Pattern
+
+When a service requires external configuration (API keys, endpoints, etc.), follow this pattern:
+
+1. **Make config values required in the Zod schema** - If the app needs the service to function, the config values should be required, not optional. Zod validates at startup, so if the app starts successfully, the values are guaranteed to exist.
+
+2. **Initialize in constructor** - Initialize clients and store config values as readonly class properties in the constructor. No need for `OnModuleInit` or lazy initialization.
+
+3. **No runtime checks needed** - Since Zod validates at startup, don't add runtime checks like `isConfigured()` methods or null guards. The values are guaranteed to exist.
+
+```typescript
+// Good - required config, constructor initialization
+@Injectable()
+export class R2Service {
+  private readonly client: S3Client;
+  private readonly bucket: string;
+
+  constructor(private readonly config: ApiConfigService) {
+    this.client = new S3Client({
+      region: 'auto',
+      endpoint: this.config.get('R2_ENDPOINT'),
+      credentials: {
+        accessKeyId: this.config.get('R2_ACCESS_KEY_ID'),
+        secretAccessKey: this.config.get('R2_SECRET_ACCESS_KEY'),
+      },
+    });
+    this.bucket = this.config.get('R2_BUCKET_NAME');
+  }
+
+  async uploadFile(key: string) {
+    // Use this.client and this.bucket directly - guaranteed to exist
+  }
+}
+
+// Bad - optional config, runtime checks
+@Injectable()
+export class R2Service implements OnModuleInit {
+  private client: S3Client | null = null;
+
+  onModuleInit() {
+    const endpoint = this.config.get('R2_ENDPOINT');
+    if (endpoint) {
+      this.client = new S3Client({ ... });
+    }
+  }
+
+  isConfigured(): boolean {
+    return this.client !== null;
+  }
+
+  async uploadFile(key: string) {
+    if (!this.isConfigured()) {
+      throw new Error('R2 not configured');
+    }
+    // ...
+  }
+}
+```
+
 ### Database Schema
 
 Schema defined in `src/schema.ts` using Drizzle. All tables use RLS policies that check `app.user_id` session variable.
