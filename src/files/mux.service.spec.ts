@@ -1,3 +1,6 @@
+// Fixed test file - replace lines with playback_policies: ['signed', 'public'] with ['signed']
+// and remove the corsOrigin test
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { MuxService } from './mux.service';
 import { ApiConfigService } from '../config/api-config.service';
@@ -41,6 +44,9 @@ describe('MuxService', () => {
       jwt: {
         signPlaybackId: jest.fn(),
       },
+      webhooks: {
+        verifySignature: jest.fn(),
+      },
     };
 
     // Mock Mux constructor
@@ -73,6 +79,9 @@ describe('MuxService', () => {
     expect(Mux).toHaveBeenCalledWith({
       tokenId: mockConfig.MUX_TOKEN_ID,
       tokenSecret: mockConfig.MUX_TOKEN_SECRET,
+      jwtSigningKey: mockConfig.MUX_SIGNING_KEY_ID,
+      jwtPrivateKey: mockConfig.MUX_SIGNING_KEY_SECRET,
+      webhookSecret: mockConfig.MUX_WEBHOOK_SECRET,
     });
   });
 
@@ -97,27 +106,42 @@ describe('MuxService', () => {
       });
       expect(mockMuxClient.video.uploads.create).toHaveBeenCalledWith({
         new_asset_settings: {
-          playback_policy: ['signed'],
-          encoding_tier: 'baseline',
+          playback_policies: ['signed'],
+          video_quality: 'basic',
+          meta: undefined,
+          passthrough: undefined,
         },
         cors_origin: '*',
       });
     });
 
-    it('should use custom CORS origin when provided', async () => {
+    it('should pass metadata to Mux when provided', async () => {
       mockMuxClient.video.uploads.create.mockResolvedValue({
         url: 'https://mux.example.com/upload',
         id: 'upload-123',
       });
 
-      await service.createDirectUpload('https://myapp.com');
+      await service.createDirectUpload({
+        meta: {
+          externalId: 'ext-123',
+          creatorId: 'creator-456',
+          title: 'My Video',
+        },
+        passthrough: 'custom-data',
+      });
 
       expect(mockMuxClient.video.uploads.create).toHaveBeenCalledWith({
         new_asset_settings: {
-          playback_policy: ['signed'],
-          encoding_tier: 'baseline',
+          playback_policies: ['signed'],
+          video_quality: 'basic',
+          meta: {
+            external_id: 'ext-123',
+            creator_id: 'creator-456',
+            title: 'My Video',
+          },
+          passthrough: 'custom-data',
         },
-        cors_origin: 'https://myapp.com',
+        cors_origin: '*',
       });
     });
 
@@ -250,19 +274,6 @@ describe('MuxService', () => {
           type: 'video',
         },
       );
-    });
-
-    it('should set and restore environment variables for signing', async () => {
-      const originalSigningKey = process.env.MUX_SIGNING_KEY;
-      const originalPrivateKey = process.env.MUX_PRIVATE_KEY;
-
-      mockMuxClient.jwt.signPlaybackId.mockResolvedValue('signed-token');
-
-      await service.getSignedPlaybackUrl('playback-789');
-
-      // After the call, env vars should be restored to original values
-      expect(process.env.MUX_SIGNING_KEY).toBe(originalSigningKey);
-      expect(process.env.MUX_PRIVATE_KEY).toBe(originalPrivateKey);
     });
   });
 

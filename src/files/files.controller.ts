@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -7,6 +8,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  RawBody,
 } from '@nestjs/common';
 import { Public } from '../auth/auth.guard';
 import { FilesService } from './files.service';
@@ -147,18 +149,18 @@ export class FilesController {
   @Public()
   async handleMuxWebhook(
     @Headers('mux-signature') signature: string,
-    @Body() body: unknown,
+    @RawBody() rawBody: Buffer | undefined,
   ) {
+    const body = rawBody?.toString() ?? '';
     // Verify webhook signature
-    const webhookSecret = this.muxService.getWebhookSecret();
-    if (webhookSecret && signature) {
-      // TODO: Implement proper Mux webhook signature verification
-      // For now, we'll just check that a signature was provided
-      // In production, you should verify using Mux's webhook verification
+    if (signature) {
+      this.muxService.verifyWebhookSignature(body, signature);
+    } else {
+      throw new BadRequestException('Missing Mux webhook signature');
     }
 
     // Process the webhook event
-    const event = body as {
+    const event = JSON.parse(body) as {
       type: string;
       data: {
         id: string;

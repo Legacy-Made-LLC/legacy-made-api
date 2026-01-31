@@ -17,31 +17,39 @@ export interface MuxAsset {
 @Injectable()
 export class MuxService {
   private readonly client: Mux;
-  private readonly signingKeyId: string;
-  private readonly signingKeySecret: string;
-  private readonly webhookSecret: string;
 
   constructor(private readonly config: ApiConfigService) {
     this.client = new Mux({
       tokenId: this.config.get('MUX_TOKEN_ID'),
       tokenSecret: this.config.get('MUX_TOKEN_SECRET'),
+      jwtSigningKey: this.config.get('MUX_SIGNING_KEY_ID'),
+      jwtPrivateKey: this.config.get('MUX_SIGNING_KEY_SECRET'),
+      webhookSecret: this.config.get('MUX_WEBHOOK_SECRET'),
     });
-    this.signingKeyId = this.config.get('MUX_SIGNING_KEY_ID');
-    this.signingKeySecret = this.config.get('MUX_SIGNING_KEY_SECRET');
-    this.webhookSecret = this.config.get('MUX_WEBHOOK_SECRET');
   }
 
   /**
    * Create a direct upload URL for the client to upload video directly to Mux.
    * Returns the upload URL and upload ID.
    */
-  async createDirectUpload(corsOrigin?: string): Promise<DirectUploadResult> {
+  async createDirectUpload(options?: {
+    meta?: { externalId?: string; creatorId?: string; title?: string };
+    passthrough?: string;
+  }): Promise<DirectUploadResult> {
     const upload = await this.client.video.uploads.create({
       new_asset_settings: {
-        playback_policy: ['signed'],
-        encoding_tier: 'baseline',
+        playback_policies: ['signed'],
+        video_quality: 'basic',
+        meta: options?.meta
+          ? {
+              external_id: options.meta.externalId,
+              creator_id: options.meta.creatorId,
+              title: options.meta.title,
+            }
+          : undefined,
+        passthrough: options?.passthrough,
       },
-      cors_origin: corsOrigin || '*',
+      cors_origin: '*',
     });
 
     if (!upload.url || !upload.id) {
@@ -90,35 +98,12 @@ export class MuxService {
     playbackId: string,
     expiresIn = '7d',
   ): Promise<string> {
-    // The SDK uses environment variables by default for signing:
-    // MUX_SIGNING_KEY and MUX_PRIVATE_KEY
-    // We need to set them temporarily or pass them explicitly
-    const originalSigningKey = process.env.MUX_SIGNING_KEY;
-    const originalPrivateKey = process.env.MUX_PRIVATE_KEY;
+    const token = await this.client.jwt.signPlaybackId(playbackId, {
+      expiration: expiresIn,
+      type: 'video',
+    });
 
-    try {
-      process.env.MUX_SIGNING_KEY = this.signingKeyId;
-      process.env.MUX_PRIVATE_KEY = this.signingKeySecret;
-
-      const token = await this.client.jwt.signPlaybackId(playbackId, {
-        expiration: expiresIn,
-        type: 'video',
-      });
-
-      return `https://stream.mux.com/${playbackId}.m3u8?token=${token}`;
-    } finally {
-      // Restore original env vars
-      if (originalSigningKey !== undefined) {
-        process.env.MUX_SIGNING_KEY = originalSigningKey;
-      } else {
-        delete process.env.MUX_SIGNING_KEY;
-      }
-      if (originalPrivateKey !== undefined) {
-        process.env.MUX_PRIVATE_KEY = originalPrivateKey;
-      } else {
-        delete process.env.MUX_PRIVATE_KEY;
-      }
-    }
+    return `https://stream.mux.com/${playbackId}.m3u8?token=${token}`;
   }
 
   /**
@@ -132,42 +117,22 @@ export class MuxService {
     thumbnailToken: string;
     storyboardToken: string;
   }> {
-    const originalSigningKey = process.env.MUX_SIGNING_KEY;
-    const originalPrivateKey = process.env.MUX_PRIVATE_KEY;
+    const [playbackToken, thumbnailToken, storyboardToken] = await Promise.all([
+      this.client.jwt.signPlaybackId(playbackId, {
+        expiration: expiresIn,
+        type: 'video',
+      }),
+      this.client.jwt.signPlaybackId(playbackId, {
+        expiration: expiresIn,
+        type: 'thumbnail',
+      }),
+      this.client.jwt.signPlaybackId(playbackId, {
+        expiration: expiresIn,
+        type: 'storyboard',
+      }),
+    ]);
 
-    try {
-      process.env.MUX_SIGNING_KEY = this.signingKeyId;
-      process.env.MUX_PRIVATE_KEY = this.signingKeySecret;
-
-      const [playbackToken, thumbnailToken, storyboardToken] =
-        await Promise.all([
-          this.client.jwt.signPlaybackId(playbackId, {
-            expiration: expiresIn,
-            type: 'video',
-          }),
-          this.client.jwt.signPlaybackId(playbackId, {
-            expiration: expiresIn,
-            type: 'thumbnail',
-          }),
-          this.client.jwt.signPlaybackId(playbackId, {
-            expiration: expiresIn,
-            type: 'storyboard',
-          }),
-        ]);
-
-      return { playbackToken, thumbnailToken, storyboardToken };
-    } finally {
-      if (originalSigningKey !== undefined) {
-        process.env.MUX_SIGNING_KEY = originalSigningKey;
-      } else {
-        delete process.env.MUX_SIGNING_KEY;
-      }
-      if (originalPrivateKey !== undefined) {
-        process.env.MUX_PRIVATE_KEY = originalPrivateKey;
-      } else {
-        delete process.env.MUX_PRIVATE_KEY;
-      }
-    }
+    return { playbackToken, thumbnailToken, storyboardToken };
   }
 
   /**
@@ -188,6 +153,17 @@ export class MuxService {
    * Get the webhook secret for signature verification.
    */
   getWebhookSecret(): string {
-    return this.webhookSecret;
+    return this.config.get('MUX_WEBHOOK_SECRET');
+  }
+
+  verifyWebhookSignature(body: string, signature: string) {
+    const secret = this.config.get('MUX_WEBHOOK_SECRET');
+    this.client.webhooks.verifySignature(
+      body,
+      {
+        'mux-signature': signature,
+      },
+      secret,
+    );
   }
 }

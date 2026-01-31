@@ -147,7 +147,10 @@ export class FilesService {
   ): Promise<VideoUploadInitResult> {
     return this.db.rls(async (tx) => {
       // Create direct upload with Mux
-      const { uploadUrl, uploadId } = await this.mux.createDirectUpload();
+      const { uploadUrl, uploadId } = await this.mux.createDirectUpload({
+        meta: dto.meta,
+        passthrough: dto.passthrough,
+      });
 
       // Create file record
       const [file] = await tx
@@ -288,7 +291,8 @@ export class FilesService {
           thumbnailUrl: `https://image.mux.com/${file.muxPlaybackId}/thumbnail.jpg?token=${tokens.thumbnailToken}`,
           tokens,
         };
-      } catch {
+      } catch (e) {
+        this.logger.error('Mux signing failed', e);
         // Mux not configured or signing failed
         return {
           id: file.id,
