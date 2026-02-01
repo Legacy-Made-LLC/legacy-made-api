@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { EntriesService } from './entries.service';
 import { DbService } from '../db/db.service';
+import { EntitlementsService } from '../entitlements';
 
 describe('EntriesService', () => {
   let service: EntriesService;
@@ -19,6 +20,15 @@ describe('EntriesService', () => {
     },
   };
 
+  const mockEntitlementsService = {
+    getQuotaStatusInTx: jest.fn().mockResolvedValue({
+      limit: 5,
+      current: 0,
+      remaining: 5,
+      unlimited: false,
+    }),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -26,6 +36,10 @@ describe('EntriesService', () => {
         {
           provide: DbService,
           useValue: mockDbService,
+        },
+        {
+          provide: EntitlementsService,
+          useValue: mockEntitlementsService,
         },
       ],
     }).compile();

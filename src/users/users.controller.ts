@@ -33,7 +33,7 @@ export class UsersController {
         signingSecret: this.config.get('SIGNING_SECRET'),
       });
     } catch (err) {
-      console.error('Error verifying webhook:', err);
+      this.logger.error('Error verifying webhook:', err);
       throw new BadRequestException('Error verifying webhook');
     }
 

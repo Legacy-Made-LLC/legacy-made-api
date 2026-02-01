@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { DbService } from 'src/db/db.service';
-import { NewUser, users } from 'src/schema';
+import { NewUser, subscriptions, users } from 'src/schema';
 
 /**
  * Service for managing user records.
@@ -21,14 +21,17 @@ export class UsersService {
   constructor(private readonly db: DbService) {}
 
   /**
-   * Create a new user record.
+   * Create a new user record with a default subscription.
    * Called by Clerk webhook when a user signs up.
    * RLS INSERT policy allows this without user context.
    */
   async createUser(user: NewUser) {
     // INSERT policy allows any insert (security enforced by webhook signature)
     const [created] = await this.db.bypassRls(async (tx) => {
-      return tx.insert(users).values(user).returning();
+      const [newUser] = await tx.insert(users).values(user).returning();
+      // Create a free subscription for the new user
+      await tx.insert(subscriptions).values({ userId: newUser.id });
+      return [newUser];
     });
     return created;
   }
@@ -45,7 +48,7 @@ export class UsersService {
     return this.db.bypassRls(async (tx) => {
       const [updated] = await tx
         .update(users)
-        .set({ ...data, updatedAt: new Date() })
+        .set(data)
         .where(eq(users.id, id))
         .returning();
       return updated;
