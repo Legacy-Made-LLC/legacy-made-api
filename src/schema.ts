@@ -102,9 +102,49 @@ export const users = pgTable(
       .notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .defaultNow()
-      .notNull(),
+      .notNull()
+      .$onUpdate(() => new Date()),
   },
   (table) => [shouldBypassRlsPolicy(), isCurrentUserPolicy(table.id)],
+).enableRLS();
+
+/**
+ * Subscriptions table - tracks user subscription tier
+ *
+ * Each user has exactly one subscription record that determines their
+ * entitlements (feature access and quotas). Created automatically when
+ * a user signs up, defaulting to 'free' tier.
+ *
+ * Future Stripe integration will update tier via webhooks.
+ */
+export const subscriptions = pgTable(
+  'subscriptions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .unique()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tier: text('tier').notNull().default('free'),
+
+    // Future Stripe fields (nullable)
+    stripeCustomerId: text('stripe_customer_id'),
+    stripeSubscriptionId: text('stripe_subscription_id'),
+    currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
+
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index('subscriptions_user_id_idx').on(table.userId),
+    shouldBypassRlsPolicy(),
+    isCurrentUserPolicy(table.userId),
+  ],
 ).enableRLS();
 
 /**
@@ -135,7 +175,8 @@ export const plans = pgTable(
       .notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .defaultNow()
-      .notNull(),
+      .notNull()
+      .$onUpdate(() => new Date()),
   },
   (table) => [
     index('plans_user_id_idx').on(table.userId),
@@ -178,7 +219,8 @@ export const entries = pgTable(
       .notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .defaultNow()
-      .notNull(),
+      .notNull()
+      .$onUpdate(() => new Date()),
   },
   (table) => [
     index('entries_plan_id_idx').on(table.planId),
@@ -194,6 +236,9 @@ export const entries = pgTable(
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+
+export type Subscription = typeof subscriptions.$inferSelect;
+export type NewSubscription = typeof subscriptions.$inferInsert;
 
 export type Plan = typeof plans.$inferSelect;
 export type NewPlan = typeof plans.$inferInsert;

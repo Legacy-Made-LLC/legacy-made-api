@@ -1,12 +1,26 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DbService, DrizzleTransaction } from '../db/db.service';
-import { entries } from '../schema';
+import { EntitlementsService } from '../entitlements';
+import { entries, Entry } from '../schema';
 import { CreateEntryDto, FindEntriesQueryDto, UpdateEntryDto } from './dto';
+
+export interface EntriesListResponse {
+  data: Entry[];
+  quota: {
+    limit: number;
+    current: number;
+    remaining: number | null;
+    unlimited: boolean;
+  };
+}
 
 @Injectable()
 export class EntriesService {
-  constructor(private readonly db: DbService) {}
+  constructor(
+    private readonly db: DbService,
+    private readonly entitlementsService: EntitlementsService,
+  ) {}
 
   /**
    * Create a new entry.
@@ -25,8 +39,12 @@ export class EntriesService {
   /**
    * Find entries for a plan, optionally filtered by query parameters.
    * RLS policy ensures only entries from user's plans are returned.
+   * Returns entries with quota usage metadata.
    */
-  async findAll(planId: string, query?: FindEntriesQueryDto) {
+  async findAll(
+    planId: string,
+    query?: FindEntriesQueryDto,
+  ): Promise<EntriesListResponse> {
     return this.db.rls(async (tx) => {
       const conditions = [eq(entries.planId, planId)];
 
@@ -34,10 +52,15 @@ export class EntriesService {
         conditions.push(eq(entries.taskKey, query.taskKey));
       }
 
-      return tx
-        .select()
-        .from(entries)
-        .where(and(...conditions));
+      const [data, quota] = await Promise.all([
+        tx
+          .select()
+          .from(entries)
+          .where(and(...conditions)),
+        this.entitlementsService.getQuotaStatusInTx(tx, 'entries'),
+      ]);
+
+      return { data, quota };
     });
   }
 
@@ -82,7 +105,6 @@ export class EntriesService {
         .set({
           ...updateEntryDto,
           metadata: updatedMetadata,
-          updatedAt: new Date(),
         })
         .where(eq(entries.id, id))
         .returning();

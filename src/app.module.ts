@@ -1,11 +1,13 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
 import { AuthModule } from './auth/auth.module';
 import { configSchema } from './config';
 import { ApiConfigModule } from './config/api-config.module';
 import { DbModule } from './db/db.module';
+import { EntitlementsModule } from './entitlements/entitlements.module';
 import { EntriesModule } from './entries/entries.module';
 import { HealthModule } from './health/health.module';
 import { PlansModule } from './plans/plans.module';
@@ -18,9 +20,11 @@ import { UsersModule } from './users/users.module';
       cache: true,
       validate: (env) => configSchema.parse(env),
     }),
+    ScheduleModule.forRoot(),
     ApiConfigModule,
     AuthModule, // Must come before DbModule for CLS to be available
     DbModule,
+    EntitlementsModule,
     UsersModule,
     EntriesModule,
     PlansModule,

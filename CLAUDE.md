@@ -29,6 +29,10 @@ npx drizzle-kit push       # Push schema directly (dev only)
 npx drizzle-kit migrate    # Run migrations
 ```
 
+## Documentation reference
+
+ALWAYS USE CONTEXT7 when needing to look up documentation on any framework or library.
+
 ## Code Generation
 
 **Always use the Nest CLI to generate modules, services, controllers, and other elements.**
