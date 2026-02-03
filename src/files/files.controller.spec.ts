@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { FilesController } from './files.controller';
 import { FilesService } from './files.service';
 import { MuxService } from './mux.service';
@@ -26,6 +27,12 @@ describe('FilesController', () => {
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
+      imports: [
+        ThrottlerModule.forRoot([
+          { name: 'short', ttl: 1000, limit: 3 },
+          { name: 'medium', ttl: 60000, limit: 20 },
+        ]),
+      ],
       controllers: [FilesController],
       providers: [
         {

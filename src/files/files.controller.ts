@@ -9,10 +9,13 @@ import {
   ParseUUIDPipe,
   Post,
   RawBody,
+  UseGuards,
 } from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Public } from '../auth/auth.guard';
 import { FilesService } from './files.service';
 import { MuxService } from './mux.service';
+import { ShareTokenPipe } from './share-token.pipe';
 import {
   InitiateUploadDto,
   CompleteUploadDto,
@@ -33,8 +36,15 @@ export class FilesController {
   /**
    * Initiate a file upload to R2.
    * POST /entries/:entryId/files/upload/init
+   *
+   * Rate limited: 3 requests/second, 20 requests/minute
    */
   @Post('entries/:entryId/files/upload/init')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    short: { limit: 3, ttl: 1000 },
+    medium: { limit: 20, ttl: 60000 },
+  })
   initiateUpload(
     @Param('entryId', ParseUUIDPipe) entryId: string,
     @Body() dto: InitiateUploadDto,
@@ -45,8 +55,15 @@ export class FilesController {
   /**
    * Initiate a video upload to Mux.
    * POST /entries/:entryId/files/video/init
+   *
+   * Rate limited: 3 requests/second, 20 requests/minute
    */
   @Post('entries/:entryId/files/video/init')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    short: { limit: 3, ttl: 1000 },
+    medium: { limit: 20, ttl: 60000 },
+  })
   initiateVideoUpload(
     @Param('entryId', ParseUUIDPipe) entryId: string,
     @Body() dto: InitiateUploadDto,
@@ -137,7 +154,7 @@ export class FilesController {
    */
   @Get('files/share/:token')
   @Public()
-  accessSharedFile(@Param('token') token: string) {
+  accessSharedFile(@Param('token', ShareTokenPipe) token: string) {
     return this.filesService.accessSharedFile(token);
   }
 

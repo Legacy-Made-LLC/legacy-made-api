@@ -1,6 +1,3 @@
-// Fixed test file - replace lines with playback_policies: ['signed', 'public'] with ['signed']
-// and remove the corsOrigin test
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { MuxService } from './mux.service';
 import { ApiConfigService } from '../config/api-config.service';
@@ -13,16 +10,17 @@ describe('MuxService', () => {
   let service: MuxService;
   let mockMuxClient: any;
 
-  const mockConfig = {
+  const mockConfig: Record<string, string | string[]> = {
     MUX_TOKEN_ID: 'test-token-id',
     MUX_TOKEN_SECRET: 'test-token-secret',
     MUX_SIGNING_KEY_ID: 'test-signing-key-id',
     MUX_SIGNING_KEY_SECRET: btoa('test-private-key'), // Base64 encoded
     MUX_WEBHOOK_SECRET: 'test-webhook-secret',
+    CORS_ALLOWED_ORIGINS: [], // Empty array defaults to '*'
   };
 
   const mockApiConfigService = {
-    get: jest.fn((key: string) => mockConfig[key as keyof typeof mockConfig]),
+    get: jest.fn((key: string) => mockConfig[key]),
   };
 
   beforeEach(async () => {

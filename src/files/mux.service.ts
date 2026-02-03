@@ -36,6 +36,13 @@ export class MuxService {
     meta?: { externalId?: string; creatorId?: string; title?: string };
     passthrough?: string;
   }): Promise<DirectUploadResult> {
+    // Use first configured CORS origin, or fall back to '*' for development
+    const allowedOrigins = this.config.get('CORS_ALLOWED_ORIGINS');
+    const corsOrigin =
+      allowedOrigins.length > 0 && allowedOrigins[0] !== ''
+        ? allowedOrigins[0]
+        : '*';
+
     const upload = await this.client.video.uploads.create({
       new_asset_settings: {
         playback_policies: ['signed'],
@@ -49,7 +56,7 @@ export class MuxService {
           : undefined,
         passthrough: options?.passthrough,
       },
-      cors_origin: '*',
+      cors_origin: corsOrigin,
     });
 
     if (!upload.url || !upload.id) {

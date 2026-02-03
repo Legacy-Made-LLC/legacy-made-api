@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
 import { AuthModule } from './auth/auth.module';
 import { configSchema } from './config';
@@ -19,6 +20,19 @@ import { FilesModule } from './files/files.module';
       cache: true,
       validate: (env) => configSchema.parse(env),
     }),
+    // Rate limiting - not applied globally, used via @UseGuards(ThrottlerGuard) on specific endpoints
+    ThrottlerModule.forRoot([
+      {
+        name: 'short',
+        ttl: 1000, // 1 second
+        limit: 3, // 3 requests per second
+      },
+      {
+        name: 'medium',
+        ttl: 60000, // 1 minute
+        limit: 20, // 20 requests per minute
+      },
+    ]),
     ApiConfigModule,
     AuthModule, // Must come before DbModule for CLS to be available
     DbModule,
