@@ -5,8 +5,10 @@ import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiClsStore } from '../lib/types/cls';
 import { entries, plans, subscriptions } from '../schema';
 import {
+  NON_EXPIRING_TIERS,
   PILLAR_DISPLAY_NAMES,
   QUOTA_DISPLAY_NAMES,
+  SUBSCRIPTION_GRACE_PERIOD_MS,
   TIER_CONFIG,
   UPGRADE_PATH,
 } from './entitlements.config';
@@ -38,6 +40,7 @@ export class EntitlementsService {
 
   /**
    * Get tier within an existing transaction.
+   * Checks for subscription expiration and returns 'free' if expired.
    */
   async getTierInTx(tx: DrizzleTransaction): Promise<SubscriptionTier> {
     const userId = this.cls.get('userId');
@@ -46,7 +49,10 @@ export class EntitlementsService {
     }
 
     const [subscription] = await tx
-      .select({ tier: subscriptions.tier })
+      .select({
+        tier: subscriptions.tier,
+        currentPeriodEnd: subscriptions.currentPeriodEnd,
+      })
       .from(subscriptions)
       .where(eq(subscriptions.userId, userId));
 
@@ -56,7 +62,39 @@ export class EntitlementsService {
       return 'free';
     }
 
-    return subscription.tier as SubscriptionTier;
+    const tier = subscription.tier as SubscriptionTier;
+
+    // Check if subscription has expired (with grace period)
+    if (this.isSubscriptionExpired(tier, subscription.currentPeriodEnd)) {
+      return 'free';
+    }
+
+    return tier;
+  }
+
+  /**
+   * Check if a subscription has expired based on tier and currentPeriodEnd.
+   * Non-expiring tiers (free, lifetime) always return false.
+   * Paid tiers are expired if currentPeriodEnd + grace period < now.
+   */
+  isSubscriptionExpired(
+    tier: SubscriptionTier,
+    currentPeriodEnd: Date | null,
+  ): boolean {
+    // Non-expiring tiers never expire
+    if (NON_EXPIRING_TIERS.includes(tier)) {
+      return false;
+    }
+
+    // Paid tiers without an end date are not expired (shouldn't happen normally)
+    if (!currentPeriodEnd) {
+      return false;
+    }
+
+    // Check if we're past the grace period
+    const expirationWithGrace =
+      currentPeriodEnd.getTime() + SUBSCRIPTION_GRACE_PERIOD_MS;
+    return Date.now() > expirationWithGrace;
   }
 
   /**

@@ -27,6 +27,7 @@
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.1.12",
     "@nestjs/platform-express": "^11.1.12",
+    "@nestjs/schedule": "^6.1.0",
     "@nestjs/terminus": "^11.0.0",
     "drizzle-orm": "^0.45.1",
     "nestjs-cls": "^6.2.0",

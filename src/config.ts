@@ -23,9 +23,11 @@ export const configSchema = z.object({
 
   // FEATURE FLAGS
   GRANT_LIFETIME_TO_NEW_USERS: z
-    .enum(['true', 'false'])
-    .default('false')
-    .transform((val) => val === 'true'),
+    .stringbool({
+      truthy: ['true', '1'],
+      falsy: ['false', '0'],
+    })
+    .default(false),
 });
 
 export type Config = z.infer<typeof configSchema>;

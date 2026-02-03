@@ -4,6 +4,18 @@ import {
   TierConfig,
 } from './entitlements.types';
 
+/**
+ * Grace period before a subscription is considered expired.
+ * Users have 24 hours after currentPeriodEnd before being downgraded.
+ */
+export const SUBSCRIPTION_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Tiers that never expire (no currentPeriodEnd check needed).
+ * These are either free or lifetime access tiers.
+ */
+export const NON_EXPIRING_TIERS: SubscriptionTier[] = ['free', 'lifetime'];
+
 export const TIER_CONFIG: Record<SubscriptionTier, TierConfig> = {
   free: {
     name: 'Free',

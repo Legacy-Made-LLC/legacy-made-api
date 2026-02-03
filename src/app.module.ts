@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
 import { AuthModule } from './auth/auth.module';
 import { configSchema } from './config';
@@ -19,6 +20,7 @@ import { UsersModule } from './users/users.module';
       cache: true,
       validate: (env) => configSchema.parse(env),
     }),
+    ScheduleModule.forRoot(),
     ApiConfigModule,
     AuthModule, // Must come before DbModule for CLS to be available
     DbModule,

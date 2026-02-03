@@ -1,7 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ClsService } from 'nestjs-cls';
 import { DbService } from '../db/db.service';
-import { TIER_CONFIG } from './entitlements.config';
+import {
+  SUBSCRIPTION_GRACE_PERIOD_MS,
+  TIER_CONFIG,
+} from './entitlements.config';
 import { EntitlementException } from './entitlements.exception';
 import { EntitlementsService } from './entitlements.service';
 import { SubscriptionTier } from './entitlements.types';
@@ -16,13 +19,19 @@ describe('EntitlementsService', () => {
     get: jest.Mock;
   };
 
-  const createMockTx = (tierOverride?: SubscriptionTier, entryCount = 0) => ({
+  const createMockTx = (
+    tierOverride?: SubscriptionTier,
+    entryCount = 0,
+    currentPeriodEnd: Date | null = null,
+  ) => ({
     select: jest.fn().mockReturnThis(),
     from: jest.fn().mockReturnThis(),
     innerJoin: jest.fn().mockReturnThis(),
     where: jest
       .fn()
-      .mockResolvedValue([{ tier: tierOverride ?? 'free', count: entryCount }]),
+      .mockResolvedValue([
+        { tier: tierOverride ?? 'free', count: entryCount, currentPeriodEnd },
+      ]),
     update: jest.fn().mockReturnThis(),
     set: jest.fn().mockReturnThis(),
   });
@@ -574,6 +583,100 @@ describe('EntitlementsService', () => {
 
       expect(mockDbService.bypassRls).toHaveBeenCalled();
       expect(mockSet).toHaveBeenCalledWith({ tier: 'individual' });
+    });
+  });
+
+  describe('isSubscriptionExpired', () => {
+    it('should return false for free tier (non-expiring)', () => {
+      const pastDate = new Date(Date.now() - 1000 * 60 * 60 * 48); // 48 hours ago
+      expect(service.isSubscriptionExpired('free', pastDate)).toBe(false);
+    });
+
+    it('should return false for lifetime tier (non-expiring)', () => {
+      const pastDate = new Date(Date.now() - 1000 * 60 * 60 * 48); // 48 hours ago
+      expect(service.isSubscriptionExpired('lifetime', pastDate)).toBe(false);
+    });
+
+    it('should return false for paid tier with null currentPeriodEnd', () => {
+      expect(service.isSubscriptionExpired('individual', null)).toBe(false);
+    });
+
+    it('should return false for paid tier within grace period', () => {
+      // Expired 12 hours ago (within 24-hour grace period)
+      const recentlyExpired = new Date(Date.now() - 1000 * 60 * 60 * 12);
+      expect(service.isSubscriptionExpired('individual', recentlyExpired)).toBe(
+        false,
+      );
+    });
+
+    it('should return true for paid tier past grace period', () => {
+      // Expired 36 hours ago (past 24-hour grace period)
+      const expiredPastGrace = new Date(
+        Date.now() - SUBSCRIPTION_GRACE_PERIOD_MS - 1000 * 60 * 60 * 12,
+      );
+      expect(
+        service.isSubscriptionExpired('individual', expiredPastGrace),
+      ).toBe(true);
+    });
+
+    it('should return true for family tier past grace period', () => {
+      const expiredPastGrace = new Date(
+        Date.now() - SUBSCRIPTION_GRACE_PERIOD_MS - 1000,
+      );
+      expect(service.isSubscriptionExpired('family', expiredPastGrace)).toBe(
+        true,
+      );
+    });
+
+    it('should return false for subscription that has not expired yet', () => {
+      const futureDate = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30); // 30 days from now
+      expect(service.isSubscriptionExpired('individual', futureDate)).toBe(
+        false,
+      );
+    });
+  });
+
+  describe('getTier with expiration', () => {
+    it('should return free tier when paid subscription has expired', async () => {
+      const expiredDate = new Date(
+        Date.now() - SUBSCRIPTION_GRACE_PERIOD_MS - 1000 * 60 * 60,
+      );
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('individual', 0, expiredDate)),
+      );
+
+      const tier = await service.getTier();
+      expect(tier).toBe('free');
+    });
+
+    it('should return actual tier when subscription is not expired', async () => {
+      const validDate = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('individual', 0, validDate)),
+      );
+
+      const tier = await service.getTier();
+      expect(tier).toBe('individual');
+    });
+
+    it('should return actual tier within grace period', async () => {
+      const recentlyExpired = new Date(Date.now() - 1000 * 60 * 60 * 12);
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('family', 0, recentlyExpired)),
+      );
+
+      const tier = await service.getTier();
+      expect(tier).toBe('family');
+    });
+
+    it('should return lifetime tier even with past expiration date', async () => {
+      const oldDate = new Date('2020-01-01');
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('lifetime', 0, oldDate)),
+      );
+
+      const tier = await service.getTier();
+      expect(tier).toBe('lifetime');
     });
   });
 });
