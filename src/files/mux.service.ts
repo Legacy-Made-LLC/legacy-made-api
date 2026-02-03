@@ -156,8 +156,16 @@ export class MuxService {
     return this.config.get('MUX_WEBHOOK_SECRET');
   }
 
+  /**
+   * Verify the signature of a webhook event.
+   * This method raises an error if the signature is invalid.
+   *
+   * @param body - The body of the webhook event.
+   * @param signature - The signature of the webhook event.
+   */
   verifyWebhookSignature(body: string, signature: string) {
     const secret = this.config.get('MUX_WEBHOOK_SECRET');
+    // Raises an error if the signature is invalid.
     this.client.webhooks.verifySignature(
       body,
       {

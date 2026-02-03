@@ -153,10 +153,14 @@ export class FilesController {
   ) {
     const body = rawBody?.toString() ?? '';
     // Verify webhook signature
-    if (signature) {
-      this.muxService.verifyWebhookSignature(body, signature);
-    } else {
+    if (!signature) {
       throw new BadRequestException('Missing Mux webhook signature');
+    }
+
+    try {
+      this.muxService.verifyWebhookSignature(body, signature);
+    } catch {
+      throw new BadRequestException('Invalid Mux webhook signature');
     }
 
     // Process the webhook event

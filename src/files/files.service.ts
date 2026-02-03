@@ -4,11 +4,11 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { randomBytes } from 'crypto';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiConfigService } from '../config/api-config.service';
-import { files, File } from '../schema';
+import { files, File, entries } from '../schema';
 import { R2Service } from './r2.service';
 import { MuxService } from './mux.service';
 import {
@@ -77,6 +77,16 @@ export class FilesService {
     const isMultipart = dto.sizeBytes > multipartThreshold;
 
     return this.db.rls(async (tx) => {
+      // Verify entry exists and user has access (RLS will enforce ownership)
+      const [entry] = await tx
+        .select({ id: entries.id })
+        .from(entries)
+        .where(eq(entries.id, entryId));
+
+      if (!entry) {
+        throw new NotFoundException(`Entry with id ${entryId} not found`);
+      }
+
       // Create file record
       const storageKey = this.generateStorageKey(entryId, dto.filename);
       const [file] = await tx
@@ -146,6 +156,16 @@ export class FilesService {
     dto: InitiateUploadDto,
   ): Promise<VideoUploadInitResult> {
     return this.db.rls(async (tx) => {
+      // Verify entry exists and user has access (RLS will enforce ownership)
+      const [entry] = await tx
+        .select({ id: entries.id })
+        .from(entries)
+        .where(eq(entries.id, entryId));
+
+      if (!entry) {
+        throw new NotFoundException(`Entry with id ${entryId} not found`);
+      }
+
       // Create direct upload with Mux
       const { uploadUrl, uploadId } = await this.mux.createDirectUpload({
         meta: dto.meta,
@@ -188,11 +208,14 @@ export class FilesService {
 
       if (file.storageType === 'r2' && dto.parts && dto.parts.length > 0) {
         // Complete multipart upload
-        // Note: We'd need to store the uploadId in the file record or metadata
-        // For now, assume the storageKey serves as the key
+        if (!dto.uploadId) {
+          throw new BadRequestException(
+            'uploadId is required to complete multipart upload',
+          );
+        }
         await this.r2.completeMultipartUpload(
           file.storageKey,
-          file.storageKey, // This would need to be the actual uploadId
+          dto.uploadId,
           dto.parts,
         );
       }
@@ -470,7 +493,9 @@ export class FilesService {
       const [file] = await tx
         .select()
         .from(files)
-        .where(eq(files.shareToken, token));
+        .where(
+          and(eq(files.shareToken, token), eq(files.accessLevel, 'shareable')),
+        );
 
       if (!file) {
         throw new NotFoundException('Share link not found or expired');
@@ -560,7 +585,12 @@ export class FilesService {
         const pendingFiles = await tx
           .select()
           .from(files)
-          .where(eq(files.storageType, 'mux'));
+          .where(
+            and(
+              eq(files.storageType, 'mux'),
+              eq(files.uploadStatus, 'pending'),
+            ),
+          );
 
         for (const file of pendingFiles) {
           // Check if this file's upload created this asset

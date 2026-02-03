@@ -100,7 +100,18 @@ describe('FilesService', () => {
         sizeBytes: 1024,
       };
 
+      let selectCallCount = 0;
       const mockTx = {
+        select: jest.fn().mockReturnThis(),
+        from: jest.fn().mockReturnThis(),
+        where: jest.fn().mockImplementation(() => {
+          selectCallCount++;
+          if (selectCallCount === 1) {
+            // Entry existence check
+            return Promise.resolve([{ id: 'entry-123' }]);
+          }
+          return mockTx;
+        }),
         insert: jest.fn().mockReturnThis(),
         values: jest.fn().mockReturnThis(),
         returning: jest.fn().mockResolvedValue([{ id: 'new-file-id' }]),
@@ -128,13 +139,23 @@ describe('FilesService', () => {
         sizeBytes: 150 * 1024 * 1024, // 150MB, over the 100MB threshold
       };
 
+      let selectCallCount = 0;
       const mockTx = {
+        select: jest.fn().mockReturnThis(),
+        from: jest.fn().mockReturnThis(),
+        where: jest.fn().mockImplementation(() => {
+          selectCallCount++;
+          if (selectCallCount === 1) {
+            // Entry existence check
+            return Promise.resolve([{ id: 'entry-123' }]);
+          }
+          return mockTx;
+        }),
         insert: jest.fn().mockReturnThis(),
         values: jest.fn().mockReturnThis(),
         returning: jest.fn().mockResolvedValue([{ id: 'new-file-id' }]),
         update: jest.fn().mockReturnThis(),
         set: jest.fn().mockReturnThis(),
-        where: jest.fn().mockResolvedValue([]),
       };
 
       mockDbService.rls.mockImplementation((cb: any) => cb(mockTx));
@@ -152,6 +173,26 @@ describe('FilesService', () => {
       expect(result.uploadMethod).toBe('PUT');
       expect(mockR2Service.createMultipartUpload).toHaveBeenCalled();
     });
+
+    it('should throw NotFoundException if entry does not exist', async () => {
+      const dto = {
+        filename: 'test.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: 1024,
+      };
+
+      const mockTx = {
+        select: jest.fn().mockReturnThis(),
+        from: jest.fn().mockReturnThis(),
+        where: jest.fn().mockResolvedValue([]), // No entry found
+      };
+
+      mockDbService.rls.mockImplementation((cb: any) => cb(mockTx));
+
+      await expect(
+        service.initiateUpload('nonexistent-entry', dto),
+      ).rejects.toThrow(NotFoundException);
+    });
   });
 
   describe('initiateVideoUpload', () => {
@@ -162,7 +203,18 @@ describe('FilesService', () => {
         sizeBytes: 50 * 1024 * 1024,
       };
 
+      let selectCallCount = 0;
       const mockTx = {
+        select: jest.fn().mockReturnThis(),
+        from: jest.fn().mockReturnThis(),
+        where: jest.fn().mockImplementation(() => {
+          selectCallCount++;
+          if (selectCallCount === 1) {
+            // Entry existence check
+            return Promise.resolve([{ id: 'entry-123' }]);
+          }
+          return mockTx;
+        }),
         insert: jest.fn().mockReturnThis(),
         values: jest.fn().mockReturnThis(),
         returning: jest.fn().mockResolvedValue([{ id: 'video-file-id' }]),
@@ -179,6 +231,26 @@ describe('FilesService', () => {
       expect(result.fileId).toBe('video-file-id');
       expect(result.uploadUrl).toBe('https://mux.example.com/upload');
       expect(mockMuxService.createDirectUpload).toHaveBeenCalled();
+    });
+
+    it('should throw NotFoundException if entry does not exist', async () => {
+      const dto = {
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        sizeBytes: 50 * 1024 * 1024,
+      };
+
+      const mockTx = {
+        select: jest.fn().mockReturnThis(),
+        from: jest.fn().mockReturnThis(),
+        where: jest.fn().mockResolvedValue([]), // No entry found
+      };
+
+      mockDbService.rls.mockImplementation((cb: any) => cb(mockTx));
+
+      await expect(
+        service.initiateVideoUpload('nonexistent-entry', dto),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -256,10 +328,37 @@ describe('FilesService', () => {
         { partNumber: 2, etag: 'etag2' },
       ];
 
-      const result = await service.completeUpload('file-123', { parts });
+      const result = await service.completeUpload('file-123', {
+        uploadId: 'upload-id-123',
+        parts,
+      });
 
       expect(result.uploadStatus).toBe('complete');
-      expect(mockR2Service.completeMultipartUpload).toHaveBeenCalled();
+      expect(mockR2Service.completeMultipartUpload).toHaveBeenCalledWith(
+        pendingFile.storageKey,
+        'upload-id-123',
+        parts,
+      );
+    });
+
+    it('should throw BadRequestException if uploadId missing for multipart', async () => {
+      const pendingFile = { ...mockFile, uploadStatus: 'uploading' };
+      const mockTx = {
+        select: jest.fn().mockReturnThis(),
+        from: jest.fn().mockReturnThis(),
+        where: jest.fn().mockResolvedValue([pendingFile]),
+      };
+
+      mockDbService.rls.mockImplementation((cb: any) => cb(mockTx));
+
+      const parts = [
+        { partNumber: 1, etag: 'etag1' },
+        { partNumber: 2, etag: 'etag2' },
+      ];
+
+      await expect(
+        service.completeUpload('file-123', { parts }),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 
@@ -464,6 +563,7 @@ describe('FilesService', () => {
     it('should return download URL for valid share token', async () => {
       const sharedFile = {
         ...mockFile,
+        accessLevel: 'shareable',
         shareToken: 'valid-token',
         shareExpiresAt: new Date(Date.now() + 3600000), // 1 hour from now
       };
@@ -500,6 +600,7 @@ describe('FilesService', () => {
     it('should throw NotFoundException for expired token', async () => {
       const expiredFile = {
         ...mockFile,
+        accessLevel: 'shareable',
         shareToken: 'expired-token',
         shareExpiresAt: new Date(Date.now() - 3600000), // 1 hour ago
       };
@@ -514,6 +615,21 @@ describe('FilesService', () => {
       await expect(service.accessSharedFile('expired-token')).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it('should throw NotFoundException for non-shareable file', async () => {
+      // File with share token but accessLevel is still 'private'
+      const mockTx = {
+        select: jest.fn().mockReturnThis(),
+        from: jest.fn().mockReturnThis(),
+        where: jest.fn().mockResolvedValue([]), // Query returns empty due to accessLevel check
+      };
+
+      mockDbService.bypassRls.mockImplementation((cb: any) => cb(mockTx));
+
+      await expect(
+        service.accessSharedFile('token-for-private-file'),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 

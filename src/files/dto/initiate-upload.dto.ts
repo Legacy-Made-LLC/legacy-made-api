@@ -2,6 +2,41 @@ import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 /**
+ * Allowed MIME types for file uploads.
+ * This prevents uploading potentially dangerous file types.
+ */
+export const ALLOWED_MIME_TYPES = [
+  // Images
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+  // Documents
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/plain',
+  // Audio
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/aac',
+  'audio/m4a',
+  'audio/x-m4a',
+  // Video (for Mux uploads)
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+  'video/x-msvideo',
+  'video/x-matroska',
+] as const;
+
+/**
  * Mux video metadata that will be associated with the asset.
  * See: https://docs.mux.com/api-reference#video/operation/create-asset
  */
@@ -24,7 +59,15 @@ export type MuxMeta = z.infer<typeof muxMetaSchema>;
  */
 export const initiateUploadSchema = z.object({
   filename: z.string().min(1),
-  mimeType: z.string().min(1),
+  mimeType: z
+    .string()
+    .refine(
+      (type) =>
+        ALLOWED_MIME_TYPES.includes(
+          type as (typeof ALLOWED_MIME_TYPES)[number],
+        ),
+      { message: 'File type not allowed' },
+    ),
   sizeBytes: z
     .number()
     .int()
