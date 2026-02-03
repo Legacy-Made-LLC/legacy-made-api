@@ -1,4 +1,4 @@
-export type SubscriptionTier = 'free' | 'individual' | 'family';
+export type SubscriptionTier = 'free' | 'individual' | 'family' | 'lifetime';
 
 export type Pillar =
   | 'important_info' // Entries

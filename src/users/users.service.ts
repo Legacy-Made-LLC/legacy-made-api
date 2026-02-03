@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
+import { ApiConfigService } from 'src/config/api-config.service';
 import { DbService } from 'src/db/db.service';
+import { SubscriptionTier } from 'src/entitlements';
 import { NewUser, subscriptions, users } from 'src/schema';
 
 /**
@@ -18,7 +20,22 @@ import { NewUser, subscriptions, users } from 'src/schema';
  */
 @Injectable()
 export class UsersService {
-  constructor(private readonly db: DbService) {}
+  constructor(
+    private readonly db: DbService,
+    private readonly config: ApiConfigService,
+  ) {}
+
+  /**
+   * Get the default subscription tier for new users.
+   * Normally returns 'free', but when GRANT_LIFETIME_TO_NEW_USERS is enabled,
+   * returns 'lifetime' for Early Access users.
+   */
+  getDefaultSubscription(): SubscriptionTier {
+    if (this.config.get('GRANT_LIFETIME_TO_NEW_USERS')) {
+      return 'lifetime';
+    }
+    return 'free';
+  }
 
   /**
    * Create a new user record with a default subscription.
@@ -29,8 +46,9 @@ export class UsersService {
     // INSERT policy allows any insert (security enforced by webhook signature)
     const [created] = await this.db.bypassRls(async (tx) => {
       const [newUser] = await tx.insert(users).values(user).returning();
-      // Create a free subscription for the new user
-      await tx.insert(subscriptions).values({ userId: newUser.id });
+      // Create subscription with appropriate tier for new user
+      const tier = this.getDefaultSubscription();
+      await tx.insert(subscriptions).values({ userId: newUser.id, tier });
       return [newUser];
     });
     return created;

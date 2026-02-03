@@ -20,6 +20,12 @@ export const configSchema = z.object({
   CLERK_JWT_KEY: z.string(),
   // -- clerk: webhooks --
   SIGNING_SECRET: z.string(),
+
+  // FEATURE FLAGS
+  GRANT_LIFETIME_TO_NEW_USERS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((val) => val === 'true'),
 });
 
 export type Config = z.infer<typeof configSchema>;

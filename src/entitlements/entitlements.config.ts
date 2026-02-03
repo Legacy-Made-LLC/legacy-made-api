@@ -44,6 +44,19 @@ export const TIER_CONFIG: Record<SubscriptionTier, TierConfig> = {
       storage_mb: 2000, // More storage
     },
   },
+  lifetime: {
+    name: 'Lifetime',
+    description: 'Early Access lifetime membership',
+    pillars: ['important_info', 'wishes', 'messages', 'family_access'],
+    viewOnlyPillars: [],
+    quotas: {
+      entries: -1, // Unlimited Important Information
+      trusted_contacts: -1, // Multiple trusted contacts
+      family_profiles: 4, // Up to 4 additional profiles (5 total people)
+      legacy_messages: -1, // Unlimited legacy messages
+      storage_mb: 2000, // More storage
+    },
+  },
 };
 
 export const UPGRADE_PATH: Partial<Record<SubscriptionTier, SubscriptionTier>> =
