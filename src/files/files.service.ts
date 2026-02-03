@@ -166,13 +166,7 @@ export class FilesService {
         throw new NotFoundException(`Entry with id ${entryId} not found`);
       }
 
-      // Create direct upload with Mux
-      const { uploadUrl, uploadId } = await this.mux.createDirectUpload({
-        meta: dto.meta,
-        passthrough: dto.passthrough,
-      });
-
-      // Create file record
+      // Create file record first to get the ID for passthrough
       const [file] = await tx
         .insert(files)
         .values({
@@ -181,10 +175,27 @@ export class FilesService {
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
           storageType: 'mux',
-          storageKey: uploadId, // Store Mux upload ID
+          storageKey: '', // Will be updated after Mux upload creation
           uploadStatus: 'pending',
         })
         .returning();
+
+      // Create direct upload with Mux, including file ID in passthrough for webhook lookup
+      const passthroughData = JSON.stringify({
+        fileId: file.id,
+        userPassthrough: dto.passthrough,
+      });
+
+      const { uploadUrl, uploadId } = await this.mux.createDirectUpload({
+        meta: dto.meta,
+        passthrough: passthroughData,
+      });
+
+      // Update file record with Mux upload ID
+      await tx
+        .update(files)
+        .set({ storageKey: uploadId })
+        .where(eq(files.id, file.id));
 
       return {
         fileId: file.id,
@@ -560,6 +571,7 @@ export class FilesService {
   /**
    * Handle Mux webhook events.
    * Updates file status when video processing completes.
+   * Uses passthrough data for O(1) file lookup instead of iterating all files.
    */
   async handleMuxWebhook(event: {
     type: string;
@@ -567,8 +579,21 @@ export class FilesService {
       id: string;
       playback_ids?: Array<{ id: string }>;
       upload_id?: string;
+      passthrough?: string;
     };
   }): Promise<void> {
+    // Try to extract file ID from passthrough data
+    let fileId: string | undefined;
+    if (event.data.passthrough) {
+      try {
+        const passthroughData = JSON.parse(event.data.passthrough);
+        fileId = passthroughData.fileId;
+      } catch {
+        // Passthrough is not JSON or doesn't have fileId
+        this.logger.warn('Could not parse passthrough data from Mux webhook');
+      }
+    }
+
     if (event.type === 'video.asset.ready') {
       const assetId = event.data.id;
       const playbackId = event.data.playback_ids?.[0]?.id;
@@ -578,38 +603,46 @@ export class FilesService {
         return;
       }
 
-      // Find file by Mux upload ID (stored in storageKey)
-      // We need to use bypassRls since webhooks don't have user context
       await this.db.bypassRls(async (tx) => {
-        // Find files that are pending and match this asset
-        const pendingFiles = await tx
-          .select()
-          .from(files)
-          .where(
-            and(
-              eq(files.storageType, 'mux'),
-              eq(files.uploadStatus, 'pending'),
-            ),
-          );
-
-        for (const file of pendingFiles) {
-          // Check if this file's upload created this asset
-          try {
-            const upload = await this.mux.getUpload(file.storageKey);
-            if (upload.assetId === assetId) {
-              await tx
-                .update(files)
-                .set({
-                  uploadStatus: 'complete',
-                  muxAssetId: assetId,
-                  muxPlaybackId: playbackId,
-                  updatedAt: new Date(),
-                })
-                .where(eq(files.id, file.id));
-              break;
-            }
-          } catch {
-            // Upload may not exist or be accessible
+        if (fileId) {
+          // Direct lookup using file ID from passthrough (O(1))
+          await tx
+            .update(files)
+            .set({
+              uploadStatus: 'complete',
+              muxAssetId: assetId,
+              muxPlaybackId: playbackId,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(files.id, fileId),
+                eq(files.storageType, 'mux'),
+                eq(files.uploadStatus, 'pending'),
+              ),
+            );
+        } else {
+          // Fallback: lookup by upload_id if passthrough not available
+          if (event.data.upload_id) {
+            await tx
+              .update(files)
+              .set({
+                uploadStatus: 'complete',
+                muxAssetId: assetId,
+                muxPlaybackId: playbackId,
+                updatedAt: new Date(),
+              })
+              .where(
+                and(
+                  eq(files.storageKey, event.data.upload_id),
+                  eq(files.storageType, 'mux'),
+                  eq(files.uploadStatus, 'pending'),
+                ),
+              );
+          } else {
+            this.logger.error(
+              `Mux webhook missing both passthrough and upload_id for asset: ${assetId}`,
+            );
           }
         }
       });
@@ -617,28 +650,35 @@ export class FilesService {
       const assetId = event.data.id;
 
       await this.db.bypassRls(async (tx) => {
-        const pendingFiles = await tx
-          .select()
-          .from(files)
-          .where(eq(files.storageType, 'mux'));
-
-        for (const file of pendingFiles) {
-          try {
-            const upload = await this.mux.getUpload(file.storageKey);
-            if (upload.assetId === assetId) {
-              await tx
-                .update(files)
-                .set({
-                  uploadStatus: 'failed',
-                  muxAssetId: assetId,
-                  updatedAt: new Date(),
-                })
-                .where(eq(files.id, file.id));
-              break;
-            }
-          } catch {
-            // Upload may not exist
-          }
+        if (fileId) {
+          // Direct lookup using file ID from passthrough (O(1))
+          await tx
+            .update(files)
+            .set({
+              uploadStatus: 'failed',
+              muxAssetId: assetId,
+              updatedAt: new Date(),
+            })
+            .where(and(eq(files.id, fileId), eq(files.storageType, 'mux')));
+        } else if (event.data.upload_id) {
+          // Fallback: lookup by upload_id
+          await tx
+            .update(files)
+            .set({
+              uploadStatus: 'failed',
+              muxAssetId: assetId,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(files.storageKey, event.data.upload_id),
+                eq(files.storageType, 'mux'),
+              ),
+            );
+        } else {
+          this.logger.error(
+            `Mux webhook missing both passthrough and upload_id for errored asset: ${assetId}`,
+          );
         }
       });
     }

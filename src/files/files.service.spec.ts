@@ -218,6 +218,8 @@ describe('FilesService', () => {
         insert: jest.fn().mockReturnThis(),
         values: jest.fn().mockReturnThis(),
         returning: jest.fn().mockResolvedValue([{ id: 'video-file-id' }]),
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
       };
 
       mockDbService.rls.mockImplementation((cb: any) => cb(mockTx));
@@ -230,7 +232,13 @@ describe('FilesService', () => {
 
       expect(result.fileId).toBe('video-file-id');
       expect(result.uploadUrl).toBe('https://mux.example.com/upload');
-      expect(mockMuxService.createDirectUpload).toHaveBeenCalled();
+      expect(mockMuxService.createDirectUpload).toHaveBeenCalledWith({
+        meta: undefined,
+        passthrough: JSON.stringify({
+          fileId: 'video-file-id',
+          userPassthrough: undefined,
+        }),
+      });
     });
 
     it('should throw NotFoundException if entry does not exist', async () => {
@@ -700,31 +708,49 @@ describe('FilesService', () => {
   });
 
   describe('handleMuxWebhook', () => {
-    it('should update file status on video.asset.ready', async () => {
-      const pendingVideoFile = {
-        ...mockVideoFile,
-        uploadStatus: 'pending',
-        muxPlaybackId: null,
-      };
+    it('should update file status on video.asset.ready using passthrough', async () => {
       const mockTx = {
-        select: jest.fn().mockReturnThis(),
-        from: jest.fn().mockReturnThis(),
-        where: jest.fn().mockResolvedValue([pendingVideoFile]),
         update: jest.fn().mockReturnThis(),
         set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockResolvedValue([]),
       };
 
       mockDbService.bypassRls.mockImplementation((cb: any) => cb(mockTx));
-      mockMuxService.getUpload.mockResolvedValue({
-        status: 'asset_created',
-        assetId: 'new-asset-id',
-      });
 
       await service.handleMuxWebhook({
         type: 'video.asset.ready',
         data: {
           id: 'new-asset-id',
           playback_ids: [{ id: 'new-playback-id' }],
+          passthrough: JSON.stringify({ fileId: 'video-123' }),
+        },
+      });
+
+      expect(mockTx.update).toHaveBeenCalled();
+      expect(mockTx.set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          uploadStatus: 'complete',
+          muxAssetId: 'new-asset-id',
+          muxPlaybackId: 'new-playback-id',
+        }),
+      );
+    });
+
+    it('should update file status using upload_id fallback', async () => {
+      const mockTx = {
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockResolvedValue([]),
+      };
+
+      mockDbService.bypassRls.mockImplementation((cb: any) => cb(mockTx));
+
+      await service.handleMuxWebhook({
+        type: 'video.asset.ready',
+        data: {
+          id: 'new-asset-id',
+          playback_ids: [{ id: 'new-playback-id' }],
+          upload_id: 'mux-upload-123',
         },
       });
 
@@ -732,27 +758,29 @@ describe('FilesService', () => {
     });
 
     it('should mark file as failed on video.asset.errored', async () => {
-      const pendingVideoFile = { ...mockVideoFile, uploadStatus: 'pending' };
       const mockTx = {
-        select: jest.fn().mockReturnThis(),
-        from: jest.fn().mockReturnThis(),
-        where: jest.fn().mockResolvedValue([pendingVideoFile]),
         update: jest.fn().mockReturnThis(),
         set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockResolvedValue([]),
       };
 
       mockDbService.bypassRls.mockImplementation((cb: any) => cb(mockTx));
-      mockMuxService.getUpload.mockResolvedValue({
-        status: 'errored',
-        assetId: 'errored-asset-id',
-      });
 
       await service.handleMuxWebhook({
         type: 'video.asset.errored',
-        data: { id: 'errored-asset-id' },
+        data: {
+          id: 'errored-asset-id',
+          passthrough: JSON.stringify({ fileId: 'video-123' }),
+        },
       });
 
       expect(mockTx.update).toHaveBeenCalled();
+      expect(mockTx.set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          uploadStatus: 'failed',
+          muxAssetId: 'errored-asset-id',
+        }),
+      );
     });
   });
 

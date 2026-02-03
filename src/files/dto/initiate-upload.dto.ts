@@ -52,13 +52,37 @@ export const muxMetaSchema = z.object({
 export type MuxMeta = z.infer<typeof muxMetaSchema>;
 
 /**
+ * Sanitize a filename by removing path separators and dangerous characters.
+ * Preserves the basic filename structure while preventing path traversal.
+ */
+function sanitizeFilename(filename: string): string {
+  return (
+    filename
+      // Remove path separators and parent directory references
+      .replace(/[/\\]/g, '')
+      .replace(/\.\./g, '')
+      // Remove null bytes and control characters
+      .replace(/[\x00-\x1f\x7f]/g, '')
+      // Trim whitespace
+      .trim()
+  );
+}
+
+/**
  * Schema for initiating a file upload.
  *
  * The client provides file metadata, and the API returns presigned URLs
  * for direct upload to R2 or Mux.
  */
 export const initiateUploadSchema = z.object({
-  filename: z.string().min(1),
+  filename: z
+    .string()
+    .min(1)
+    .max(255)
+    .transform(sanitizeFilename)
+    .refine((name) => name.length > 0, {
+      message: 'Filename cannot be empty after sanitization',
+    }),
   mimeType: z
     .string()
     .refine(
