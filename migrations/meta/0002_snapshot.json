@@ -1,6 +1,6 @@
 {
-  "id": "d39f1f85-1799-4411-90fe-cc84cbf421e1",
-  "prevId": "9c2964f1-9f13-450e-ad55-bd81bdb4f60c",
+  "id": "006b504e-3201-4778-9c78-59bc1260fc56",
+  "prevId": "d39f1f85-1799-4411-90fe-cc84cbf421e1",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -169,6 +169,206 @@
             "public"
           ],
           "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        }
+      },
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
+    "public.files": {
+      "name": "files",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "entry_id": {
+          "name": "entry_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "filename": {
+          "name": "filename",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mime_type": {
+          "name": "mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "size_bytes": {
+          "name": "size_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "storage_type": {
+          "name": "storage_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "storage_key": {
+          "name": "storage_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "upload_status": {
+          "name": "upload_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "mux_playback_id": {
+          "name": "mux_playback_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mux_asset_id": {
+          "name": "mux_asset_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'private'"
+        },
+        "share_token": {
+          "name": "share_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "share_expires_at": {
+          "name": "share_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "files_entry_id_idx": {
+          "name": "files_entry_id_idx",
+          "columns": [
+            {
+              "expression": "entry_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "files_share_token_idx": {
+          "name": "files_share_token_idx",
+          "columns": [
+            {
+              "expression": "share_token",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "files_entry_id_entries_id_fk": {
+          "name": "files_entry_id_entries_id_fk",
+          "tableFrom": "files",
+          "tableTo": "entries",
+          "columnsFrom": [
+            "entry_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "bypass_rls_policy": {
+          "name": "bypass_rls_policy",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "'on' = current_setting('app.bypass_rls_status', true)"
+        },
+        "crud-public-policy-select": {
+          "name": "crud-public-policy-select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": [
+            "public"
+          ],
+          "using": "\n        EXISTS (\n          SELECT 1 FROM entries e\n          JOIN plans p ON p.id = e.plan_id\n          WHERE e.id = \"files\".\"entry_id\"\n          AND p.user_id = current_setting('app.user_id', true)\n        )\n      "
+        },
+        "crud-public-policy-insert": {
+          "name": "crud-public-policy-insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": [
+            "public"
+          ],
+          "withCheck": "\n        EXISTS (\n          SELECT 1 FROM entries e\n          JOIN plans p ON p.id = e.plan_id\n          WHERE e.id = \"files\".\"entry_id\"\n          AND p.user_id = current_setting('app.user_id', true)\n        )\n      "
+        },
+        "crud-public-policy-update": {
+          "name": "crud-public-policy-update",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": [
+            "public"
+          ],
+          "using": "\n        EXISTS (\n          SELECT 1 FROM entries e\n          JOIN plans p ON p.id = e.plan_id\n          WHERE e.id = \"files\".\"entry_id\"\n          AND p.user_id = current_setting('app.user_id', true)\n        )\n      ",
+          "withCheck": "\n        EXISTS (\n          SELECT 1 FROM entries e\n          JOIN plans p ON p.id = e.plan_id\n          WHERE e.id = \"files\".\"entry_id\"\n          AND p.user_id = current_setting('app.user_id', true)\n        )\n      "
+        },
+        "crud-public-policy-delete": {
+          "name": "crud-public-policy-delete",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": [
+            "public"
+          ],
+          "using": "\n        EXISTS (\n          SELECT 1 FROM entries e\n          JOIN plans p ON p.id = e.plan_id\n          WHERE e.id = \"files\".\"entry_id\"\n          AND p.user_id = current_setting('app.user_id', true)\n        )\n      "
         }
       },
       "checkConstraints": {},

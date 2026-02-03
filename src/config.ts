@@ -46,6 +46,14 @@ export const configSchema = z.object({
     .number()
     .optional()
     .default(100 * 1024 * 1024), // 100MB
+
+  // FEATURE FLAGS
+  GRANT_LIFETIME_TO_NEW_USERS: z
+    .stringbool({
+      truthy: ['true', '1'],
+      falsy: ['false', '0'],
+    })
+    .default(false),
 });
 
 export type Config = z.infer<typeof configSchema>;

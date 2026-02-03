@@ -1,8 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DbService, DrizzleTransaction } from '../db/db.service';
-import { entries, Entry } from '../schema';
+import { EntitlementsService } from '../entitlements';
 import { FilesService } from '../files/files.service';
+import { entries, Entry } from '../schema';
 import {
   CreateEntryDto,
   FindEntriesQueryDto,
@@ -10,10 +11,21 @@ import {
   EntryResponseDto,
 } from './dto';
 
+export interface EntriesListResponse {
+  data: EntryResponseDto[];
+  quota: {
+    limit: number;
+    current: number;
+    remaining: number | null;
+    unlimited: boolean;
+  };
+}
+
 @Injectable()
 export class EntriesService {
   constructor(
     private readonly db: DbService,
+    private readonly entitlementsService: EntitlementsService,
     private readonly filesService: FilesService,
   ) {}
 
@@ -35,27 +47,33 @@ export class EntriesService {
    * Find entries for a plan, optionally filtered by query parameters.
    * Includes files with presigned URLs for each entry.
    * RLS policy ensures only entries from user's plans are returned.
+   * Returns entries with quota usage metadata.
    */
   async findAll(
     planId: string,
     query?: FindEntriesQueryDto,
-  ): Promise<EntryResponseDto[]> {
-    // First, get the entries
-    const entryList = await this.db.rls(async (tx) => {
+  ): Promise<EntriesListResponse> {
+    // First, get the entries and quota
+    const { entryList, quota } = await this.db.rls(async (tx) => {
       const conditions = [eq(entries.planId, planId)];
 
       if (query?.taskKey) {
         conditions.push(eq(entries.taskKey, query.taskKey));
       }
 
-      return tx
-        .select()
-        .from(entries)
-        .where(and(...conditions));
+      const [data, quotaStatus] = await Promise.all([
+        tx
+          .select()
+          .from(entries)
+          .where(and(...conditions)),
+        this.entitlementsService.getQuotaStatusInTx(tx, 'entries'),
+      ]);
+
+      return { entryList: data, quota: quotaStatus };
     });
 
     if (entryList.length === 0) {
-      return [];
+      return { data: [], quota };
     }
 
     // Batch fetch files for all entries
@@ -64,7 +82,7 @@ export class EntriesService {
     const filesByEntry = this.groupBy(allFiles, 'entryId');
 
     // Build responses with files
-    return Promise.all(
+    const data = await Promise.all(
       entryList.map(async (entry) => {
         const entryFiles = filesByEntry[entry.id] || [];
         const filesWithUrls =
@@ -72,6 +90,8 @@ export class EntriesService {
         return this.toEntryResponse(entry, filesWithUrls);
       }),
     );
+
+    return { data, quota };
   }
 
   /**
@@ -121,7 +141,6 @@ export class EntriesService {
         .set({
           ...updateEntryDto,
           metadata: updatedMetadata,
-          updatedAt: new Date(),
         })
         .where(eq(entries.id, id))
         .returning();

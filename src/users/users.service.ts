@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
+import { ApiConfigService } from 'src/config/api-config.service';
 import { DbService } from 'src/db/db.service';
-import { NewUser, users } from 'src/schema';
+import { SubscriptionTier } from 'src/entitlements';
+import { NewUser, subscriptions, users } from 'src/schema';
 
 /**
  * Service for managing user records.
@@ -18,17 +20,36 @@ import { NewUser, users } from 'src/schema';
  */
 @Injectable()
 export class UsersService {
-  constructor(private readonly db: DbService) {}
+  constructor(
+    private readonly db: DbService,
+    private readonly config: ApiConfigService,
+  ) {}
 
   /**
-   * Create a new user record.
+   * Get the default subscription tier for new users.
+   * Normally returns 'free', but when GRANT_LIFETIME_TO_NEW_USERS is enabled,
+   * returns 'lifetime' for Early Access users.
+   */
+  getDefaultSubscription(): SubscriptionTier {
+    if (this.config.get('GRANT_LIFETIME_TO_NEW_USERS')) {
+      return 'lifetime';
+    }
+    return 'free';
+  }
+
+  /**
+   * Create a new user record with a default subscription.
    * Called by Clerk webhook when a user signs up.
    * RLS INSERT policy allows this without user context.
    */
   async createUser(user: NewUser) {
     // INSERT policy allows any insert (security enforced by webhook signature)
     const [created] = await this.db.bypassRls(async (tx) => {
-      return tx.insert(users).values(user).returning();
+      const [newUser] = await tx.insert(users).values(user).returning();
+      // Create subscription with appropriate tier for new user
+      const tier = this.getDefaultSubscription();
+      await tx.insert(subscriptions).values({ userId: newUser.id, tier });
+      return [newUser];
     });
     return created;
   }
@@ -45,7 +66,7 @@ export class UsersService {
     return this.db.bypassRls(async (tx) => {
       const [updated] = await tx
         .update(users)
-        .set({ ...data, updatedAt: new Date() })
+        .set(data)
         .where(eq(users.id, id))
         .returning();
       return updated;
