@@ -4,9 +4,6 @@ export const configSchema = z.object({
   // GENERAL
   PORT: z.coerce.number().optional().default(3000),
 
-  // DEV AUTH - When set, allows X-Dev-User-Id header to bypass Clerk auth
-  DEV_AUTH_USER_ID: z.string().optional(),
-
   // DATABASE
   DATABASE_URL_APP: z.string(),
   DATABASE_URL_MIGRATIONS: z.string(),

@@ -24,16 +24,12 @@ export const DEV_USER_ID_HEADER = 'x-dev-user-id';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
-  private readonly devAuthEnabled: boolean;
-
   constructor(
     @Inject(CLERK_CLIENT) private readonly clerkClient: ClerkClient,
     private readonly reflector: Reflector,
     private readonly cls: ClsService<ApiClsStore>,
     private readonly config: ApiConfigService,
-  ) {
-    this.devAuthEnabled = !!this.config.get('DEV_AUTH_USER_ID');
-  }
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
@@ -51,15 +47,6 @@ export class AuthGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest<ExpressRequest>();
-
-    // Dev auth bypass: when DEV_AUTH_USER_ID is configured, allow X-Dev-User-Id header
-    if (this.devAuthEnabled) {
-      const devUserId = request.get(DEV_USER_ID_HEADER);
-      if (devUserId) {
-        this.cls.set('userId', devUserId);
-        return true;
-      }
-    }
 
     // Clerk has a bug where it's expecting the Web API Request object, not
     // the Express Request object.

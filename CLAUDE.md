@@ -61,6 +61,7 @@ npx nest g decorator auth/roles --flat
 ```
 
 **Testing requirements:**
+
 - **Never use `--no-spec`** - Always generate test files with new modules/services/controllers
 - After generating new files, run `npm test` to verify the default tests pass
 - If a generated spec file fails, fix it immediately before continuing
@@ -112,6 +113,7 @@ Most endpoints accepting a JSON request body should use DTO validation. Modules 
 **Structure:** `src/<module>/dto/<name>.dto.ts`
 
 **Pattern:**
+
 ```typescript
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
@@ -125,6 +127,7 @@ export class CreatePlanDto extends createZodDto(createPlanSchema) {}
 ```
 
 **Naming conventions:**
+
 - File: `<name>.dto.ts` (e.g., `create-plan.dto.ts`, `update-plan.dto.ts`)
 - Schema: `<name>Schema` (e.g., `createPlanSchema`, `updatePlanSchema`)
 - Class: `<Name>Dto` (e.g., `CreatePlanDto`, `UpdatePlanDto`)
@@ -132,6 +135,7 @@ export class CreatePlanDto extends createZodDto(createPlanSchema) {}
 **Discriminated unions:** `createZodDto()` does not support `z.discriminatedUnion()` due to a TypeScript limitation (TS2509 - cannot extend a union type). See [nestjs-zod#41](https://github.com/BenLorantfy/nestjs-zod/issues/41).
 
 Workaround - use a type alias and apply validation directly in the controller:
+
 ```typescript
 // In DTO file
 export const createEntrySchema = z.discriminatedUnion('category', [...]);
@@ -145,6 +149,7 @@ create(@Body(new ZodValidationPipe(createEntrySchema)) dto: CreateEntryDto) {
 ```
 
 **Query Parameter DTOs:** Use the same pattern for validating query parameters. Create a DTO with a Zod schema and use it with the `@Query()` decorator:
+
 ```typescript
 // In DTO file (e.g., list-entries-query.dto.ts)
 import { createZodDto } from 'nestjs-zod';
@@ -168,6 +173,7 @@ findAll(@Query() query: ListEntriesQueryDto) {
 Note: Use `z.coerce.number()` for numeric query params since they arrive as strings.
 
 **Passing query DTOs to services:** Pass the query DTO to the service's `findAll` method. The query parameter should be optional so the method can be called without filters:
+
 ```typescript
 // In service
 async findAll(planId: string, query?: FindEntriesQueryDto) {
@@ -196,6 +202,7 @@ findAll(
 ```
 
 **Passing DTOs to Drizzle:** Pass validated DTOs directly to `.values()` and `.set()` methods. The Zod schema ensures the data shape matches the database schema, so manual attribute mapping is unnecessary:
+
 ```typescript
 // Good - pass DTO directly
 async create(dto: CreatePlanDto) {
@@ -234,22 +241,6 @@ async create(dto: CreatePlanDto) {
 Environment variables are validated at startup via Zod schema in `src/config.ts`. Use `ApiConfigService.get()` for type-safe config access.
 
 Required env vars: `DATABASE_URL`
-
-### Dev Auth Bypass (for curl/API testing)
-
-When `DEV_AUTH_USER_ID` is set in your environment, you can bypass Clerk JWT authentication by sending an `X-Dev-User-Id` header with any user ID:
-
-```bash
-# In .env
-DEV_AUTH_USER_ID=enabled   # Any truthy value enables the feature
-
-# curl examples
-curl -H "X-Dev-User-Id: user_2abc123" http://localhost:3000/plans
-curl -X POST -H "X-Dev-User-Id: user_2abc123" -H "Content-Type: application/json" \
-  -d '{"name": "Test Plan"}' http://localhost:3000/plans
-```
-
-The header value becomes the authenticated user ID for RLS queries. This feature only works when `DEV_AUTH_USER_ID` is configured - never set this in production.
 
 ### Service Configuration Pattern
 
@@ -315,6 +306,7 @@ export class R2Service implements OnModuleInit {
 Schema defined in `src/schema.ts` using Drizzle. All tables use RLS policies that check `app.user_id` session variable.
 
 **Domain model (4 pillars):**
+
 1. **Entries** - Important information (contacts, financial, insurance, legal docs, home, digital access)
 2. **Wishes** - Personal preferences and guidance
 3. **Trusted Contacts** - Family access management with access levels
@@ -325,6 +317,7 @@ Schema defined in `src/schema.ts` using Drizzle. All tables use RLS policies tha
 ### RLS Authentication Pattern
 
 For authenticated queries, set the user context before executing:
+
 ```sql
 SET LOCAL app.user_id = 'clerk_user_id';
 ```
