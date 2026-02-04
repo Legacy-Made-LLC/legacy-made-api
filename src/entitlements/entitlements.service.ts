@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { count, eq } from 'drizzle-orm';
+import { count, eq, sum } from 'drizzle-orm';
 import { ClsService } from 'nestjs-cls';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiClsStore } from '../lib/types/cls';
-import { entries, plans, subscriptions } from '../schema';
+import { entries, files, plans, subscriptions } from '../schema';
 import {
   NON_EXPIRING_TIERS,
   PILLAR_DISPLAY_NAMES,
@@ -258,9 +258,18 @@ export class EntitlementsService {
         // TODO: Implement when messages table exists
         return 0;
 
-      case 'storage_mb':
-        // TODO: Implement when files/attachments table exists
-        return 0;
+      case 'storage_mb': {
+        // Sum file sizes across all user's entries (via entry → plan → user)
+        const [result] = await tx
+          .select({ totalBytes: sum(files.sizeBytes) })
+          .from(files)
+          .innerJoin(entries, eq(files.entryId, entries.id))
+          .innerJoin(plans, eq(entries.planId, plans.id))
+          .where(eq(plans.userId, userId));
+        const totalBytes = Number(result?.totalBytes ?? 0);
+        // Convert bytes to MB (quota is in MB)
+        return Math.ceil(totalBytes / (1024 * 1024));
+      }
 
       default:
         return 0;
@@ -422,5 +431,66 @@ export class EntitlementsService {
       remaining: unlimited ? null : Math.max(0, limit - current),
       unlimited,
     };
+  }
+
+  /**
+   * Check if a file of a given size can be uploaded without exceeding storage quota.
+   * Returns an EntitlementResult indicating whether the upload is allowed.
+   *
+   * This differs from canUseQuotaInTx('storage_mb') which only checks if any
+   * space remains (current < limit). This method checks if the specific file
+   * fits: (current + fileSizeMb) <= limit.
+   *
+   * Note: File sizes are converted to MB using Math.ceil, so a 1-byte file
+   * counts as 1 MB. This is intentionally conservative.
+   */
+  async canUploadFileSizeInTx(
+    tx: DrizzleTransaction,
+    sizeBytes: number,
+  ): Promise<EntitlementResult> {
+    const tier = await this.getTierInTx(tx);
+    const config = TIER_CONFIG[tier];
+    const limitMb = config.quotas.storage_mb;
+
+    // -1 means unlimited
+    if (limitMb === -1) {
+      return { allowed: true };
+    }
+
+    const currentMb = await this.getUsageInTx(tx, 'storage_mb');
+    const fileSizeMb = Math.ceil(sizeBytes / (1024 * 1024));
+
+    if (currentMb + fileSizeMb <= limitMb) {
+      return { allowed: true };
+    }
+
+    const suggestedTier = UPGRADE_PATH[tier];
+    return {
+      allowed: false,
+      reason: 'quota_exceeded',
+      message: `This file would exceed your storage limit. You have ${Math.max(0, limitMb - currentMb)} MB remaining of ${limitMb} MB.`,
+      details: {
+        feature: 'storage_mb',
+        tier,
+        limit: limitMb,
+        current: currentMb,
+        requested: fileSizeMb,
+        upgradeRequired: true,
+        suggestedTier,
+      },
+    };
+  }
+
+  /**
+   * Require that a file of a given size can be uploaded or throw an exception.
+   */
+  async requireFileSizeQuotaInTx(
+    tx: DrizzleTransaction,
+    sizeBytes: number,
+  ): Promise<void> {
+    const result = await this.canUploadFileSizeInTx(tx, sizeBytes);
+    if (!result.allowed) {
+      throw new EntitlementException(result);
+    }
   }
 }

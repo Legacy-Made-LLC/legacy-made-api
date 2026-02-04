@@ -2,11 +2,17 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { EntitlementsService } from '../entitlements';
+import { FilesService } from '../files/files.service';
 import { entries, Entry } from '../schema';
-import { CreateEntryDto, FindEntriesQueryDto, UpdateEntryDto } from './dto';
+import {
+  CreateEntryDto,
+  FindEntriesQueryDto,
+  UpdateEntryDto,
+  EntryResponseDto,
+} from './dto';
 
 export interface EntriesListResponse {
-  data: Entry[];
+  data: EntryResponseDto[];
   quota: {
     limit: number;
     current: number;
@@ -20,6 +26,7 @@ export class EntriesService {
   constructor(
     private readonly db: DbService,
     private readonly entitlementsService: EntitlementsService,
+    private readonly filesService: FilesService,
   ) {}
 
   /**
@@ -38,6 +45,7 @@ export class EntriesService {
 
   /**
    * Find entries for a plan, optionally filtered by query parameters.
+   * Includes files with presigned URLs for each entry.
    * RLS policy ensures only entries from user's plans are returned.
    * Returns entries with quota usage metadata.
    */
@@ -45,14 +53,15 @@ export class EntriesService {
     planId: string,
     query?: FindEntriesQueryDto,
   ): Promise<EntriesListResponse> {
-    return this.db.rls(async (tx) => {
+    // First, get the entries and quota
+    const { entryList, quota } = await this.db.rls(async (tx) => {
       const conditions = [eq(entries.planId, planId)];
 
       if (query?.taskKey) {
         conditions.push(eq(entries.taskKey, query.taskKey));
       }
 
-      const [data, quota] = await Promise.all([
+      const [data, quotaStatus] = await Promise.all([
         tx
           .select()
           .from(entries)
@@ -60,18 +69,45 @@ export class EntriesService {
         this.entitlementsService.getQuotaStatusInTx(tx, 'entries'),
       ]);
 
-      return { data, quota };
+      return { entryList: data, quota: quotaStatus };
     });
+
+    if (entryList.length === 0) {
+      return { data: [], quota };
+    }
+
+    // Batch fetch files for all entries
+    const entryIds = entryList.map((e) => e.id);
+    const allFiles = await this.filesService.findByEntryIds(entryIds);
+    const filesByEntry = this.groupBy(allFiles, 'entryId');
+
+    // Build responses with files
+    const data = await Promise.all(
+      entryList.map(async (entry) => {
+        const entryFiles = filesByEntry[entry.id] || [];
+        const filesWithUrls =
+          await this.filesService.toFileResponses(entryFiles);
+        return this.toEntryResponse(entry, filesWithUrls);
+      }),
+    );
+
+    return { data, quota };
   }
 
   /**
-   * Find a single entry by ID.
+   * Find a single entry by ID with files included.
    * RLS policy ensures only entries from user's plans are visible.
    */
-  async findOne(id: string) {
-    return this.db.rls(async (tx) => {
+  async findOne(id: string): Promise<EntryResponseDto> {
+    const entry = await this.db.rls(async (tx) => {
       return this.findOneInTx(tx, id);
     });
+
+    // Fetch files for this entry
+    const fileList = await this.filesService.findAllForEntry(id);
+    const filesWithUrls = await this.filesService.toFileResponses(fileList);
+
+    return this.toEntryResponse(entry, filesWithUrls);
   }
 
   /**
@@ -123,5 +159,40 @@ export class EntriesService {
       await tx.delete(entries).where(eq(entries.id, id));
       return { deleted: true };
     });
+  }
+
+  /**
+   * Convert entry to response DTO with files.
+   */
+  private toEntryResponse(
+    entry: Entry,
+    files: Awaited<ReturnType<FilesService['toFileResponses']>>,
+  ): EntryResponseDto {
+    return {
+      id: entry.id,
+      planId: entry.planId,
+      taskKey: entry.taskKey,
+      title: entry.title,
+      notes: entry.notes,
+      sortOrder: entry.sortOrder,
+      metadata: entry.metadata as Record<string, unknown>,
+      files,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+    };
+  }
+
+  /**
+   * Group array items by a key.
+   */
+  private groupBy<T>(arr: T[], key: keyof T): Record<string, T[]> {
+    return arr.reduce(
+      (acc, item) => {
+        const k = String(item[key]);
+        (acc[k] = acc[k] || []).push(item);
+        return acc;
+      },
+      {} as Record<string, T[]>,
+    );
   }
 }

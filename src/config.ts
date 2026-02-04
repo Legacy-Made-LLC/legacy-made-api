@@ -21,6 +21,29 @@ export const configSchema = z.object({
   // -- clerk: webhooks --
   SIGNING_SECRET: z.string(),
 
+  // CLOUDFLARE R2
+  R2_ENDPOINT: z.string(),
+  R2_ACCESS_KEY_ID: z.string(),
+  R2_SECRET_ACCESS_KEY: z.string(),
+  R2_BUCKET_NAME: z.string(),
+
+  // MUX
+  MUX_TOKEN_ID: z.string(),
+  MUX_TOKEN_SECRET: z.string(),
+  MUX_SIGNING_KEY_ID: z.string(),
+  MUX_SIGNING_KEY_SECRET: z.string(),
+  MUX_WEBHOOK_SECRET: z.string(),
+
+  // FILE UPLOAD
+  MAX_FILE_SIZE_BYTES: z.coerce
+    .number()
+    .optional()
+    .default(1024 * 1024 * 1024), // 1GB
+  MULTIPART_THRESHOLD_BYTES: z.coerce
+    .number()
+    .optional()
+    .default(100 * 1024 * 1024), // 100MB
+
   // FEATURE FLAGS
   GRANT_LIFETIME_TO_NEW_USERS: z
     .stringbool({

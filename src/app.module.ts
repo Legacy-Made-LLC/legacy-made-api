@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
 import { AuthModule } from './auth/auth.module';
 import { configSchema } from './config';
@@ -12,6 +13,7 @@ import { EntriesModule } from './entries/entries.module';
 import { HealthModule } from './health/health.module';
 import { PlansModule } from './plans/plans.module';
 import { UsersModule } from './users/users.module';
+import { FilesModule } from './files/files.module';
 
 @Module({
   imports: [
@@ -21,6 +23,19 @@ import { UsersModule } from './users/users.module';
       validate: (env) => configSchema.parse(env),
     }),
     ScheduleModule.forRoot(),
+    // Rate limiting - not applied globally, used via @UseGuards(ThrottlerGuard) on specific endpoints
+    ThrottlerModule.forRoot([
+      {
+        name: 'short',
+        ttl: 1000, // 1 second
+        limit: 3, // 3 requests per second
+      },
+      {
+        name: 'medium',
+        ttl: 60000, // 1 minute
+        limit: 20, // 20 requests per minute
+      },
+    ]),
     ApiConfigModule,
     AuthModule, // Must come before DbModule for CLS to be available
     DbModule,
@@ -29,6 +44,7 @@ import { UsersModule } from './users/users.module';
     EntriesModule,
     PlansModule,
     HealthModule,
+    FilesModule,
   ],
   providers: [
     {

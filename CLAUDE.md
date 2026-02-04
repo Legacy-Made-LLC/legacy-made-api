@@ -61,6 +61,7 @@ npx nest g decorator auth/roles --flat
 ```
 
 **Testing requirements:**
+
 - **Never use `--no-spec`** - Always generate test files with new modules/services/controllers
 - After generating new files, run `npm test` to verify the default tests pass
 - If a generated spec file fails, fix it immediately before continuing
@@ -112,6 +113,7 @@ Most endpoints accepting a JSON request body should use DTO validation. Modules 
 **Structure:** `src/<module>/dto/<name>.dto.ts`
 
 **Pattern:**
+
 ```typescript
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
@@ -125,6 +127,7 @@ export class CreatePlanDto extends createZodDto(createPlanSchema) {}
 ```
 
 **Naming conventions:**
+
 - File: `<name>.dto.ts` (e.g., `create-plan.dto.ts`, `update-plan.dto.ts`)
 - Schema: `<name>Schema` (e.g., `createPlanSchema`, `updatePlanSchema`)
 - Class: `<Name>Dto` (e.g., `CreatePlanDto`, `UpdatePlanDto`)
@@ -132,6 +135,7 @@ export class CreatePlanDto extends createZodDto(createPlanSchema) {}
 **Discriminated unions:** `createZodDto()` does not support `z.discriminatedUnion()` due to a TypeScript limitation (TS2509 - cannot extend a union type). See [nestjs-zod#41](https://github.com/BenLorantfy/nestjs-zod/issues/41).
 
 Workaround - use a type alias and apply validation directly in the controller:
+
 ```typescript
 // In DTO file
 export const createEntrySchema = z.discriminatedUnion('category', [...]);
@@ -145,6 +149,7 @@ create(@Body(new ZodValidationPipe(createEntrySchema)) dto: CreateEntryDto) {
 ```
 
 **Query Parameter DTOs:** Use the same pattern for validating query parameters. Create a DTO with a Zod schema and use it with the `@Query()` decorator:
+
 ```typescript
 // In DTO file (e.g., list-entries-query.dto.ts)
 import { createZodDto } from 'nestjs-zod';
@@ -168,6 +173,7 @@ findAll(@Query() query: ListEntriesQueryDto) {
 Note: Use `z.coerce.number()` for numeric query params since they arrive as strings.
 
 **Passing query DTOs to services:** Pass the query DTO to the service's `findAll` method. The query parameter should be optional so the method can be called without filters:
+
 ```typescript
 // In service
 async findAll(planId: string, query?: FindEntriesQueryDto) {
@@ -196,6 +202,7 @@ findAll(
 ```
 
 **Passing DTOs to Drizzle:** Pass validated DTOs directly to `.values()` and `.set()` methods. The Zod schema ensures the data shape matches the database schema, so manual attribute mapping is unnecessary:
+
 ```typescript
 // Good - pass DTO directly
 async create(dto: CreatePlanDto) {
@@ -235,11 +242,71 @@ Environment variables are validated at startup via Zod schema in `src/config.ts`
 
 Required env vars: `DATABASE_URL`
 
+### Service Configuration Pattern
+
+When a service requires external configuration (API keys, endpoints, etc.), follow this pattern:
+
+1. **Make config values required in the Zod schema** - If the app needs the service to function, the config values should be required, not optional. Zod validates at startup, so if the app starts successfully, the values are guaranteed to exist.
+
+2. **Initialize in constructor** - Initialize clients and store config values as readonly class properties in the constructor. No need for `OnModuleInit` or lazy initialization.
+
+3. **No runtime checks needed** - Since Zod validates at startup, don't add runtime checks like `isConfigured()` methods or null guards. The values are guaranteed to exist.
+
+```typescript
+// Good - required config, constructor initialization
+@Injectable()
+export class R2Service {
+  private readonly client: S3Client;
+  private readonly bucket: string;
+
+  constructor(private readonly config: ApiConfigService) {
+    this.client = new S3Client({
+      region: 'auto',
+      endpoint: this.config.get('R2_ENDPOINT'),
+      credentials: {
+        accessKeyId: this.config.get('R2_ACCESS_KEY_ID'),
+        secretAccessKey: this.config.get('R2_SECRET_ACCESS_KEY'),
+      },
+    });
+    this.bucket = this.config.get('R2_BUCKET_NAME');
+  }
+
+  async uploadFile(key: string) {
+    // Use this.client and this.bucket directly - guaranteed to exist
+  }
+}
+
+// Bad - optional config, runtime checks
+@Injectable()
+export class R2Service implements OnModuleInit {
+  private client: S3Client | null = null;
+
+  onModuleInit() {
+    const endpoint = this.config.get('R2_ENDPOINT');
+    if (endpoint) {
+      this.client = new S3Client({ ... });
+    }
+  }
+
+  isConfigured(): boolean {
+    return this.client !== null;
+  }
+
+  async uploadFile(key: string) {
+    if (!this.isConfigured()) {
+      throw new Error('R2 not configured');
+    }
+    // ...
+  }
+}
+```
+
 ### Database Schema
 
 Schema defined in `src/schema.ts` using Drizzle. All tables use RLS policies that check `app.user_id` session variable.
 
 **Domain model (4 pillars):**
+
 1. **Entries** - Important information (contacts, financial, insurance, legal docs, home, digital access)
 2. **Wishes** - Personal preferences and guidance
 3. **Trusted Contacts** - Family access management with access levels
@@ -250,6 +317,7 @@ Schema defined in `src/schema.ts` using Drizzle. All tables use RLS policies tha
 ### RLS Authentication Pattern
 
 For authenticated queries, set the user context before executing:
+
 ```sql
 SET LOCAL app.user_id = 'clerk_user_id';
 ```

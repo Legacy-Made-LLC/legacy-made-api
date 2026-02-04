@@ -15,6 +15,13 @@
       "when": 1769892602086,
       "tag": "0001_add_entitlements",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1770149241115,
+      "tag": "0002_chubby_spot",
+      "breakpoints": true
     }
   ]
 }
