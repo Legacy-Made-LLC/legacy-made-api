@@ -11,7 +11,6 @@ import { Reflector } from '@nestjs/core';
 import { ApiClsStore } from 'src/lib/types/cls';
 import { ClsService } from 'nestjs-cls';
 import { CLERK_CLIENT } from 'src/lib/clerk/client';
-import { ApiConfigService } from 'src/config/api-config.service';
 import type { Request as ExpressRequest } from 'express';
 
 export const IS_PUBLIC_KEY = 'isPublic';
@@ -20,15 +19,12 @@ export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
 export const BYPASS_JWT_AUTH = 'bypassJwtAuth';
 export const BypassJwtAuth = () => SetMetadata(BYPASS_JWT_AUTH, true);
 
-export const DEV_USER_ID_HEADER = 'x-dev-user-id';
-
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
     @Inject(CLERK_CLIENT) private readonly clerkClient: ClerkClient,
     private readonly reflector: Reflector,
     private readonly cls: ClsService<ApiClsStore>,
-    private readonly config: ApiConfigService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {

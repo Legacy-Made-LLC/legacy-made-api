@@ -3,7 +3,6 @@ import { Reflector } from '@nestjs/core';
 import { ClsService } from 'nestjs-cls';
 import { AuthGuard } from './auth.guard';
 import { CLERK_CLIENT } from '../lib/clerk/client';
-import { ApiConfigService } from '../config/api-config.service';
 
 describe('AuthGuard', () => {
   let guard: AuthGuard;
@@ -21,10 +20,6 @@ describe('AuthGuard', () => {
     get: jest.fn(),
   };
 
-  const mockConfigService = {
-    get: jest.fn().mockReturnValue(undefined),
-  };
-
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -40,10 +35,6 @@ describe('AuthGuard', () => {
         {
           provide: ClsService,
           useValue: mockClsService,
-        },
-        {
-          provide: ApiConfigService,
-          useValue: mockConfigService,
         },
       ],
     }).compile();
