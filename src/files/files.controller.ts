@@ -13,6 +13,10 @@ import {
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Public } from '../auth/auth.guard';
+import {
+  EntitlementsGuard,
+  RequiresQuota,
+} from '../entitlements/entitlements.guard';
 import { FilesService } from './files.service';
 import { MuxService } from './mux.service';
 import { ShareTokenPipe } from './share-token.pipe';
@@ -38,9 +42,18 @@ export class FilesController {
    * POST /entries/:entryId/files/upload/init
    *
    * Rate limited: 3 requests/second, 20 requests/minute
+   *
+   * Quota enforcement happens at two levels:
+   * 1. Guard level (@RequiresQuota): Early rejection if user has zero quota
+   *    remaining (e.g., free tier or already at capacity). This check only
+   *    verifies current < limit, not whether the specific file fits.
+   * 2. Service level (requireFileSizeQuotaInTx): Precise check that the
+   *    specific file size fits within remaining quota, done within the
+   *    same transaction as file record creation.
    */
   @Post('entries/:entryId/files/upload/init')
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(ThrottlerGuard, EntitlementsGuard)
+  @RequiresQuota('storage_mb')
   @Throttle({
     short: { limit: 3, ttl: 1000 },
     medium: { limit: 20, ttl: 60000 },
@@ -57,9 +70,13 @@ export class FilesController {
    * POST /entries/:entryId/files/video/init
    *
    * Rate limited: 3 requests/second, 20 requests/minute
+   *
+   * Quota enforcement: See initiateUpload() for details on the two-level
+   * quota check (guard for early rejection, service for precise enforcement).
    */
   @Post('entries/:entryId/files/video/init')
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(ThrottlerGuard, EntitlementsGuard)
+  @RequiresQuota('storage_mb')
   @Throttle({
     short: { limit: 3, ttl: 1000 },
     medium: { limit: 20, ttl: 60000 },

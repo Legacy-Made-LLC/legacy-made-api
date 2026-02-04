@@ -8,6 +8,7 @@ import { eq, and, inArray } from 'drizzle-orm';
 import { randomBytes } from 'crypto';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiConfigService } from '../config/api-config.service';
+import { EntitlementsService } from '../entitlements/entitlements.service';
 import { files, File, entries } from '../schema';
 import { R2Service } from './r2.service';
 import { MuxService } from './mux.service';
@@ -63,6 +64,7 @@ export class FilesService {
     private readonly config: ApiConfigService,
     private readonly r2: R2Service,
     private readonly mux: MuxService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   /**
@@ -86,6 +88,14 @@ export class FilesService {
       if (!entry) {
         throw new NotFoundException(`Entry with id ${entryId} not found`);
       }
+
+      // Verify storage quota is sufficient for this specific file size.
+      // This is the authoritative check - the controller's @RequiresQuota guard
+      // only checks if any space remains (current < limit), while this checks
+      // if the specific file fits (current + fileSize <= limit). Both checks
+      // happen to provide early rejection at the guard level and precise
+      // enforcement here within the same transaction as file creation.
+      await this.entitlements.requireFileSizeQuotaInTx(tx, dto.sizeBytes);
 
       // Create file record
       const storageKey = this.generateStorageKey(entryId, dto.filename);
@@ -165,6 +175,10 @@ export class FilesService {
       if (!entry) {
         throw new NotFoundException(`Entry with id ${entryId} not found`);
       }
+
+      // Verify storage quota is sufficient for this specific file size.
+      // See initiateUpload() for details on the two-level quota enforcement.
+      await this.entitlements.requireFileSizeQuotaInTx(tx, dto.sizeBytes);
 
       // Create file record first to get the ID for passthrough
       const [file] = await tx

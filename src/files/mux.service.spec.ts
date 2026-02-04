@@ -48,7 +48,7 @@ describe('MuxService', () => {
     };
 
     // Mock Mux constructor
-    (Mux as jest.Mock).mockImplementation(() => mockMuxClient);
+    (Mux as unknown as jest.Mock).mockImplementation(() => mockMuxClient);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -80,12 +80,6 @@ describe('MuxService', () => {
       jwtSigningKey: mockConfig.MUX_SIGNING_KEY_ID,
       jwtPrivateKey: mockConfig.MUX_SIGNING_KEY_SECRET,
       webhookSecret: mockConfig.MUX_WEBHOOK_SECRET,
-    });
-  });
-
-  describe('getWebhookSecret', () => {
-    it('should return webhook secret', () => {
-      expect(service.getWebhookSecret()).toBe('test-webhook-secret');
     });
   });
 

@@ -3,6 +3,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { FilesController } from './files.controller';
 import { FilesService } from './files.service';
 import { MuxService } from './mux.service';
+import { EntitlementsService } from '../entitlements/entitlements.service';
 
 describe('FilesController', () => {
   let controller: FilesController;
@@ -21,8 +22,10 @@ describe('FilesController', () => {
     handleMuxWebhook: jest.fn(),
   };
 
-  const mockMuxService = {
-    getWebhookSecret: jest.fn().mockReturnValue(null),
+  const mockMuxService = {};
+
+  const mockEntitlementsService = {
+    canUseQuota: jest.fn().mockResolvedValue({ allowed: true }),
   };
 
   beforeEach(async () => {
@@ -42,6 +45,10 @@ describe('FilesController', () => {
         {
           provide: MuxService,
           useValue: mockMuxService,
+        },
+        {
+          provide: EntitlementsService,
+          useValue: mockEntitlementsService,
         },
       ],
     }).compile();

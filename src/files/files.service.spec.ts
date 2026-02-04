@@ -5,12 +5,14 @@ import { DbService } from '../db/db.service';
 import { ApiConfigService } from '../config/api-config.service';
 import { R2Service } from './r2.service';
 import { MuxService } from './mux.service';
+import { EntitlementsService } from '../entitlements/entitlements.service';
 
 describe('FilesService', () => {
   let service: FilesService;
   let mockDbService: any;
   let mockR2Service: any;
   let mockMuxService: any;
+  let mockEntitlementsService: any;
 
   const mockFile = {
     id: 'file-123',
@@ -66,6 +68,10 @@ describe('FilesService', () => {
       deleteAsset: jest.fn(),
     };
 
+    mockEntitlementsService = {
+      requireFileSizeQuotaInTx: jest.fn().mockResolvedValue(undefined),
+    };
+
     const mockApiConfigService = {
       get: jest.fn().mockImplementation((key: string) => {
         if (key === 'MULTIPART_THRESHOLD_BYTES') {
@@ -82,6 +88,7 @@ describe('FilesService', () => {
         { provide: ApiConfigService, useValue: mockApiConfigService },
         { provide: R2Service, useValue: mockR2Service },
         { provide: MuxService, useValue: mockMuxService },
+        { provide: EntitlementsService, useValue: mockEntitlementsService },
       ],
     }).compile();
 

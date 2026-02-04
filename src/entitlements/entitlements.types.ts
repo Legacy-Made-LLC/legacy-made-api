@@ -30,6 +30,7 @@ export interface EntitlementResult {
     tier: SubscriptionTier;
     limit?: number;
     current?: number;
+    requested?: number; // Amount being requested (e.g., file size in MB)
     upgradeRequired: boolean;
     suggestedTier?: SubscriptionTier;
   };
