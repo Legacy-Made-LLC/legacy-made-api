@@ -58,11 +58,14 @@ export class FilesController {
     short: { limit: 3, ttl: 1000 },
     medium: { limit: 20, ttl: 60000 },
   })
-  initiateUpload(
+  initiateEntryUpload(
     @Param('entryId', ParseUUIDPipe) entryId: string,
     @Body() dto: InitiateUploadDto,
   ) {
-    return this.filesService.initiateUpload(entryId, dto);
+    return this.filesService.initiateUpload(
+      { type: 'entry', id: entryId },
+      dto,
+    );
   }
 
   /**
@@ -71,7 +74,7 @@ export class FilesController {
    *
    * Rate limited: 3 requests/second, 20 requests/minute
    *
-   * Quota enforcement: See initiateUpload() for details on the two-level
+   * Quota enforcement: See initiateEntryUpload() for details on the two-level
    * quota check (guard for early rejection, service for precise enforcement).
    */
   @Post('entries/:entryId/files/video/init')
@@ -81,11 +84,14 @@ export class FilesController {
     short: { limit: 3, ttl: 1000 },
     medium: { limit: 20, ttl: 60000 },
   })
-  initiateVideoUpload(
+  initiateEntryVideoUpload(
     @Param('entryId', ParseUUIDPipe) entryId: string,
     @Body() dto: InitiateUploadDto,
   ) {
-    return this.filesService.initiateVideoUpload(entryId, dto);
+    return this.filesService.initiateVideoUpload(
+      { type: 'entry', id: entryId },
+      dto,
+    );
   }
 
   /**
@@ -124,7 +130,7 @@ export class FilesController {
     @Param('wishId', ParseUUIDPipe) wishId: string,
     @Body() dto: InitiateUploadDto,
   ) {
-    return this.filesService.initiateWishUpload(wishId, dto);
+    return this.filesService.initiateUpload({ type: 'wish', id: wishId }, dto);
   }
 
   /**
@@ -146,7 +152,10 @@ export class FilesController {
     @Param('wishId', ParseUUIDPipe) wishId: string,
     @Body() dto: InitiateUploadDto,
   ) {
-    return this.filesService.initiateWishVideoUpload(wishId, dto);
+    return this.filesService.initiateVideoUpload(
+      { type: 'wish', id: wishId },
+      dto,
+    );
   }
 
   /**

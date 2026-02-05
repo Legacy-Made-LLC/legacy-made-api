@@ -22,6 +22,14 @@ import {
 // Part size for multipart uploads (100MB)
 const PART_SIZE = 100 * 1024 * 1024;
 
+/**
+ * Discriminated union for file parent reference.
+ * Files can be attached to either an entry or a wish.
+ */
+export type FileParent =
+  | { type: 'entry'; id: string }
+  | { type: 'wish'; id: string };
+
 export interface UploadInitResult {
   fileId: string;
   uploadUrl?: string;
@@ -68,26 +76,19 @@ export class FilesService {
   ) {}
 
   /**
-   * Initiate an R2 file upload.
+   * Initiate an R2 file upload for an entry or wish.
    * Returns presigned URLs for direct upload to R2.
    */
   async initiateUpload(
-    entryId: string,
+    parent: FileParent,
     dto: InitiateUploadDto,
   ): Promise<UploadInitResult> {
     const multipartThreshold = this.config.get('MULTIPART_THRESHOLD_BYTES');
     const isMultipart = dto.sizeBytes > multipartThreshold;
 
     return this.db.rls(async (tx) => {
-      // Verify entry exists and user has access (RLS will enforce ownership)
-      const [entry] = await tx
-        .select({ id: entries.id })
-        .from(entries)
-        .where(eq(entries.id, entryId));
-
-      if (!entry) {
-        throw new NotFoundException(`Entry with id ${entryId} not found`);
-      }
+      // Verify parent exists and user has access (RLS will enforce ownership)
+      await this.verifyParentExists(tx, parent);
 
       // Verify storage quota is sufficient for this specific file size.
       // This is the authoritative check - the controller's @RequiresQuota guard
@@ -98,11 +99,12 @@ export class FilesService {
       await this.entitlements.requireFileSizeQuotaInTx(tx, dto.sizeBytes);
 
       // Create file record
-      const storageKey = this.generateStorageKey(entryId, dto.filename);
+      const storageKey = this.generateStorageKey(parent, dto.filename);
       const [file] = await tx
         .insert(files)
         .values({
-          entryId,
+          entryId: parent.type === 'entry' ? parent.id : undefined,
+          wishId: parent.type === 'wish' ? parent.id : undefined,
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
@@ -158,23 +160,16 @@ export class FilesService {
   }
 
   /**
-   * Initiate a Mux video upload.
+   * Initiate a Mux video upload for an entry or wish.
    * Returns a direct upload URL for uploading video to Mux.
    */
   async initiateVideoUpload(
-    entryId: string,
+    parent: FileParent,
     dto: InitiateUploadDto,
   ): Promise<VideoUploadInitResult> {
     return this.db.rls(async (tx) => {
-      // Verify entry exists and user has access (RLS will enforce ownership)
-      const [entry] = await tx
-        .select({ id: entries.id })
-        .from(entries)
-        .where(eq(entries.id, entryId));
-
-      if (!entry) {
-        throw new NotFoundException(`Entry with id ${entryId} not found`);
-      }
+      // Verify parent exists and user has access (RLS will enforce ownership)
+      await this.verifyParentExists(tx, parent);
 
       // Verify storage quota is sufficient for this specific file size.
       // See initiateUpload() for details on the two-level quota enforcement.
@@ -184,7 +179,8 @@ export class FilesService {
       const [file] = await tx
         .insert(files)
         .values({
-          entryId,
+          entryId: parent.type === 'entry' ? parent.id : undefined,
+          wishId: parent.type === 'wish' ? parent.id : undefined,
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
@@ -219,148 +215,32 @@ export class FilesService {
   }
 
   /**
-   * Initiate an R2 file upload for a wish.
-   * Returns presigned URLs for direct upload to R2.
+   * Verify that a parent (entry or wish) exists.
+   * RLS will enforce ownership.
    */
-  async initiateWishUpload(
-    wishId: string,
-    dto: InitiateUploadDto,
-  ): Promise<UploadInitResult> {
-    const multipartThreshold = this.config.get('MULTIPART_THRESHOLD_BYTES');
-    const isMultipart = dto.sizeBytes > multipartThreshold;
+  private async verifyParentExists(
+    tx: DrizzleTransaction,
+    parent: FileParent,
+  ): Promise<void> {
+    if (parent.type === 'entry') {
+      const [entry] = await tx
+        .select({ id: entries.id })
+        .from(entries)
+        .where(eq(entries.id, parent.id));
 
-    return this.db.rls(async (tx) => {
-      // Verify wish exists and user has access (RLS will enforce ownership)
+      if (!entry) {
+        throw new NotFoundException(`Entry with id ${parent.id} not found`);
+      }
+    } else {
       const [wish] = await tx
         .select({ id: wishes.id })
         .from(wishes)
-        .where(eq(wishes.id, wishId));
+        .where(eq(wishes.id, parent.id));
 
       if (!wish) {
-        throw new NotFoundException(`Wish with id ${wishId} not found`);
+        throw new NotFoundException(`Wish with id ${parent.id} not found`);
       }
-
-      // Verify storage quota is sufficient for this specific file size
-      await this.entitlements.requireFileSizeQuotaInTx(tx, dto.sizeBytes);
-
-      // Create file record
-      const storageKey = this.generateWishStorageKey(wishId, dto.filename);
-      const [file] = await tx
-        .insert(files)
-        .values({
-          wishId,
-          filename: dto.filename,
-          mimeType: dto.mimeType,
-          sizeBytes: dto.sizeBytes,
-          storageType: 'r2',
-          storageKey,
-          uploadStatus: 'pending',
-        })
-        .returning();
-
-      const expiresAt = new Date(Date.now() + 3600 * 1000); // 1 hour
-
-      if (isMultipart) {
-        // Multipart upload for large files
-        const uploadId = await this.r2.createMultipartUpload(
-          storageKey,
-          dto.mimeType,
-        );
-        const numParts = Math.ceil(dto.sizeBytes / PART_SIZE);
-        const parts = await this.r2.getPartUploadUrls(
-          storageKey,
-          uploadId,
-          numParts,
-        );
-
-        // Store uploadId in file record for completion
-        await tx
-          .update(files)
-          .set({ uploadStatus: 'uploading' })
-          .where(eq(files.id, file.id));
-
-        return {
-          fileId: file.id,
-          uploadMethod: 'PUT' as const,
-          expiresAt: expiresAt.toISOString(),
-          uploadId,
-          parts,
-        };
-      } else {
-        // Single upload for smaller files
-        const uploadUrl = await this.r2.createPresignedUploadUrl(
-          storageKey,
-          dto.mimeType,
-        );
-
-        return {
-          fileId: file.id,
-          uploadUrl,
-          uploadMethod: 'PUT' as const,
-          expiresAt: expiresAt.toISOString(),
-        };
-      }
-    });
-  }
-
-  /**
-   * Initiate a Mux video upload for a wish.
-   * Returns a direct upload URL for uploading video to Mux.
-   */
-  async initiateWishVideoUpload(
-    wishId: string,
-    dto: InitiateUploadDto,
-  ): Promise<VideoUploadInitResult> {
-    return this.db.rls(async (tx) => {
-      // Verify wish exists and user has access (RLS will enforce ownership)
-      const [wish] = await tx
-        .select({ id: wishes.id })
-        .from(wishes)
-        .where(eq(wishes.id, wishId));
-
-      if (!wish) {
-        throw new NotFoundException(`Wish with id ${wishId} not found`);
-      }
-
-      // Verify storage quota is sufficient for this specific file size
-      await this.entitlements.requireFileSizeQuotaInTx(tx, dto.sizeBytes);
-
-      // Create file record first to get the ID for passthrough
-      const [file] = await tx
-        .insert(files)
-        .values({
-          wishId,
-          filename: dto.filename,
-          mimeType: dto.mimeType,
-          sizeBytes: dto.sizeBytes,
-          storageType: 'mux',
-          storageKey: '', // Will be updated after Mux upload creation
-          uploadStatus: 'pending',
-        })
-        .returning();
-
-      // Create direct upload with Mux, including file ID in passthrough for webhook lookup
-      const passthroughData = JSON.stringify({
-        fileId: file.id,
-        userPassthrough: dto.passthrough,
-      });
-
-      const { uploadUrl, uploadId } = await this.mux.createDirectUpload({
-        meta: dto.meta,
-        passthrough: passthroughData,
-      });
-
-      // Update file record with Mux upload ID
-      await tx
-        .update(files)
-        .set({ storageKey: uploadId })
-        .where(eq(files.id, file.id));
-
-      return {
-        fileId: file.id,
-        uploadUrl,
-      };
-    });
+    }
   }
 
   /**
@@ -869,22 +749,14 @@ export class FilesService {
   }
 
   /**
-   * Generate a unique storage key for an entry file.
+   * Generate a unique storage key for a file.
+   * Path format: {entries|wishes}/{parentId}/{timestamp}-{random}.{ext}
    */
-  private generateStorageKey(entryId: string, filename: string): string {
+  private generateStorageKey(parent: FileParent, filename: string): string {
     const timestamp = Date.now();
     const random = randomBytes(8).toString('hex');
     const ext = filename.includes('.') ? filename.split('.').pop() : '';
-    return `entries/${entryId}/${timestamp}-${random}${ext ? `.${ext}` : ''}`;
-  }
-
-  /**
-   * Generate a unique storage key for a wish file.
-   */
-  private generateWishStorageKey(wishId: string, filename: string): string {
-    const timestamp = Date.now();
-    const random = randomBytes(8).toString('hex');
-    const ext = filename.includes('.') ? filename.split('.').pop() : '';
-    return `wishes/${wishId}/${timestamp}-${random}${ext ? `.${ext}` : ''}`;
+    const prefix = parent.type === 'entry' ? 'entries' : 'wishes';
+    return `${prefix}/${parent.id}/${timestamp}-${random}${ext ? `.${ext}` : ''}`;
   }
 }
