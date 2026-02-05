@@ -98,6 +98,67 @@ export class FilesController {
   }
 
   // =========================================================================
+  // Wish-scoped endpoints
+  // =========================================================================
+
+  /**
+   * Initiate a file upload to R2 for a wish.
+   * POST /wishes/:wishId/files/upload/init
+   *
+   * Rate limited: 3 requests/second, 20 requests/minute
+   *
+   * Quota enforcement happens at two levels:
+   * 1. Guard level (@RequiresQuota): Early rejection if user has zero quota
+   *    remaining (e.g., free tier or already at capacity).
+   * 2. Service level (requireFileSizeQuotaInTx): Precise check that the
+   *    specific file size fits within remaining quota.
+   */
+  @Post('wishes/:wishId/files/upload/init')
+  @UseGuards(ThrottlerGuard, EntitlementsGuard)
+  @RequiresQuota('storage_mb')
+  @Throttle({
+    short: { limit: 3, ttl: 1000 },
+    medium: { limit: 20, ttl: 60000 },
+  })
+  initiateWishUpload(
+    @Param('wishId', ParseUUIDPipe) wishId: string,
+    @Body() dto: InitiateUploadDto,
+  ) {
+    return this.filesService.initiateWishUpload(wishId, dto);
+  }
+
+  /**
+   * Initiate a video upload to Mux for a wish.
+   * POST /wishes/:wishId/files/video/init
+   *
+   * Rate limited: 3 requests/second, 20 requests/minute
+   *
+   * Quota enforcement: See initiateWishUpload() for details.
+   */
+  @Post('wishes/:wishId/files/video/init')
+  @UseGuards(ThrottlerGuard, EntitlementsGuard)
+  @RequiresQuota('storage_mb')
+  @Throttle({
+    short: { limit: 3, ttl: 1000 },
+    medium: { limit: 20, ttl: 60000 },
+  })
+  initiateWishVideoUpload(
+    @Param('wishId', ParseUUIDPipe) wishId: string,
+    @Body() dto: InitiateUploadDto,
+  ) {
+    return this.filesService.initiateWishVideoUpload(wishId, dto);
+  }
+
+  /**
+   * List all files for a wish.
+   * GET /wishes/:wishId/files
+   */
+  @Get('wishes/:wishId/files')
+  findAllForWish(@Param('wishId', ParseUUIDPipe) wishId: string) {
+    return this.filesService.findAllForWish(wishId);
+  }
+
+  // =========================================================================
   // File-scoped endpoints
   // =========================================================================
 

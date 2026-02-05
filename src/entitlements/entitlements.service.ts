@@ -3,7 +3,7 @@ import { count, eq, sum } from 'drizzle-orm';
 import { ClsService } from 'nestjs-cls';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiClsStore } from '../lib/types/cls';
-import { entries, files, plans, subscriptions } from '../schema';
+import { entries, files, plans, subscriptions, wishes } from '../schema';
 import {
   NON_EXPIRING_TIERS,
   PILLAR_DISPLAY_NAMES,
@@ -242,6 +242,16 @@ export class EntitlementsService {
           .select({ count: count() })
           .from(entries)
           .innerJoin(plans, eq(entries.planId, plans.id))
+          .where(eq(plans.userId, userId));
+        return result?.count ?? 0;
+      }
+
+      case 'wishes': {
+        // Count all wishes across user's plans
+        const [result] = await tx
+          .select({ count: count() })
+          .from(wishes)
+          .innerJoin(plans, eq(wishes.planId, plans.id))
           .where(eq(plans.userId, userId));
         return result?.count ?? 0;
       }

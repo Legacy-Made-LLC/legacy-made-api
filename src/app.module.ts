@@ -14,6 +14,7 @@ import { HealthModule } from './health/health.module';
 import { PlansModule } from './plans/plans.module';
 import { UsersModule } from './users/users.module';
 import { FilesModule } from './files/files.module';
+import { WishesModule } from './wishes/wishes.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { FilesModule } from './files/files.module';
     PlansModule,
     HealthModule,
     FilesModule,
+    WishesModule,
   ],
   providers: [
     {

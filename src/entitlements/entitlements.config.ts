@@ -24,6 +24,7 @@ export const TIER_CONFIG: Record<SubscriptionTier, TierConfig> = {
     viewOnlyPillars: ['wishes', 'messages', 'family_access'], // Can view all sections
     quotas: {
       entries: 5, // Up to 5 Important Information items
+      wishes: 0, // No wishes on free tier
       trusted_contacts: 0, // No trusted contacts
       family_profiles: 0, // No additional family profiles
       legacy_messages: 0, // No legacy messages
@@ -37,6 +38,7 @@ export const TIER_CONFIG: Record<SubscriptionTier, TierConfig> = {
     viewOnlyPillars: [],
     quotas: {
       entries: -1, // Unlimited Important Information
+      wishes: -1, // Unlimited wishes
       trusted_contacts: 1, // 1 trusted contact (view-only)
       family_profiles: 0, // No additional family profiles
       legacy_messages: -1, // Unlimited legacy messages
@@ -50,6 +52,7 @@ export const TIER_CONFIG: Record<SubscriptionTier, TierConfig> = {
     viewOnlyPillars: [],
     quotas: {
       entries: -1, // Unlimited Important Information
+      wishes: -1, // Unlimited wishes
       trusted_contacts: -1, // Multiple trusted contacts
       family_profiles: 4, // Up to 4 additional profiles (5 total people)
       legacy_messages: -1, // Unlimited legacy messages
@@ -63,6 +66,7 @@ export const TIER_CONFIG: Record<SubscriptionTier, TierConfig> = {
     viewOnlyPillars: [],
     quotas: {
       entries: -1, // Unlimited Important Information
+      wishes: -1, // Unlimited wishes
       trusted_contacts: -1, // Multiple trusted contacts
       family_profiles: 4, // Up to 4 additional profiles (5 total people)
       legacy_messages: -1, // Unlimited legacy messages
@@ -79,6 +83,7 @@ export const UPGRADE_PATH: Partial<Record<SubscriptionTier, SubscriptionTier>> =
 
 export const QUOTA_DISPLAY_NAMES: Record<QuotaFeature, string> = {
   entries: 'important information items',
+  wishes: 'wishes and guidance items',
   trusted_contacts: 'trusted contacts',
   family_profiles: 'family profiles',
   legacy_messages: 'legacy messages',

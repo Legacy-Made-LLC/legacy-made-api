@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
+import { MetadataSchema } from '../common/dto/metadata-schema';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { EntitlementsService } from '../entitlements';
 import { FilesService } from '../files/files.service';
@@ -176,6 +177,7 @@ export class EntriesService {
       notes: entry.notes,
       sortOrder: entry.sortOrder,
       metadata: entry.metadata as Record<string, unknown>,
+      metadataSchema: entry.metadataSchema as MetadataSchema | null,
       files,
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
