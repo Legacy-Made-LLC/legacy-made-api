@@ -1,5 +1,6 @@
 import { createZodDto } from 'nestjs-zod';
-import { z } from 'zod';
+import { NewEntry } from 'src/schema';
+import { z, ZodType } from 'zod';
 
 /**
  * Schema for creating a new entry.
@@ -11,9 +12,9 @@ import { z } from 'zod';
 export const createEntrySchema = z.object({
   taskKey: z.string().min(1),
   title: z.string().min(1),
-  notes: z.string().optional(),
+  notes: z.string().optional().nullable(),
   sortOrder: z.number().int().optional().default(0),
   metadata: z.record(z.string(), z.unknown()).default({}),
-});
+}) satisfies ZodType<Omit<NewEntry, 'planId'>>;
 
 export class CreateEntryDto extends createZodDto(createEntrySchema) {}
