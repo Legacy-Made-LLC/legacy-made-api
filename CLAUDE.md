@@ -126,6 +126,37 @@ export const createPlanSchema = z.object({
 export class CreatePlanDto extends createZodDto(createPlanSchema) {}
 ```
 
+**Type-safe schemas with `satisfies`:** Use `satisfies ZodType<T>` to ensure DTO schemas match Drizzle insert types at compile time. This catches mismatches between the DTO and database schema (missing fields, wrong types, etc.) before runtime:
+
+```typescript
+import { createZodDto } from 'nestjs-zod';
+import { NewEntry } from 'src/schema';
+import { z, ZodType } from 'zod';
+
+export const createEntrySchema = z.object({
+  taskKey: z.string().min(1),
+  title: z.string().min(1),
+  notes: z.string().optional().nullable(),
+  sortOrder: z.number().int().optional().default(0),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+}) satisfies ZodType<Omit<NewEntry, 'planId'>>;
+
+export class CreateEntryDto extends createZodDto(createEntrySchema) {}
+```
+
+Use `Omit<NewType, 'field'>` to exclude fields that are added by the service layer (like `planId` which comes from route params).
+
+**Update schemas from create schemas:** Derive update DTOs from create DTOs using `.partial()` to make all fields optional. This avoids duplicating the schema definition and ensures consistency:
+
+```typescript
+import { createZodDto } from 'nestjs-zod';
+import { createEntrySchema } from './create-entry.dto';
+
+export const updateEntrySchema = createEntrySchema.partial();
+
+export class UpdateEntryDto extends createZodDto(updateEntrySchema) {}
+```
+
 **Naming conventions:**
 
 - File: `<name>.dto.ts` (e.g., `create-plan.dto.ts`, `update-plan.dto.ts`)
