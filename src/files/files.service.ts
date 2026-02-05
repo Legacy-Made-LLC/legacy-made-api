@@ -247,16 +247,25 @@ export class FilesService {
    * Complete an upload after the client has finished uploading.
    * For R2 multipart uploads, this finalizes the upload.
    * For R2 single uploads and Mux, this marks the file as complete.
+   *
+   * Returns the file with signed URLs for immediate access.
    */
-  async completeUpload(fileId: string, dto: CompleteUploadDto): Promise<File> {
-    return this.db.rls(async (tx) => {
-      const file = await this.findOneInTx(tx, fileId);
+  async completeUpload(
+    fileId: string,
+    dto: CompleteUploadDto,
+  ): Promise<FileResponseDto> {
+    const file = await this.db.rls(async (tx) => {
+      const existingFile = await this.findOneInTx(tx, fileId);
 
-      if (file.uploadStatus === 'complete') {
-        return file;
+      if (existingFile.uploadStatus === 'complete') {
+        return existingFile;
       }
 
-      if (file.storageType === 'r2' && dto.parts && dto.parts.length > 0) {
+      if (
+        existingFile.storageType === 'r2' &&
+        dto.parts &&
+        dto.parts.length > 0
+      ) {
         // Complete multipart upload
         if (!dto.uploadId) {
           throw new BadRequestException(
@@ -264,7 +273,7 @@ export class FilesService {
           );
         }
         await this.r2.completeMultipartUpload(
-          file.storageKey,
+          existingFile.storageKey,
           dto.uploadId,
           dto.parts,
         );
@@ -278,6 +287,8 @@ export class FilesService {
 
       return updated;
     });
+
+    return this.toFileResponse(file);
   }
 
   /**
