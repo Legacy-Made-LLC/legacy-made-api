@@ -1,15 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { MetadataSchema } from '../common/dto/metadata-schema';
+import { groupBy } from '../common/utils/array';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { EntitlementsService } from '../entitlements';
 import { FilesService } from '../files/files.service';
 import { entries, Entry } from '../schema';
 import {
   CreateEntryDto,
+  EntryResponseDto,
   FindEntriesQueryDto,
   UpdateEntryDto,
-  EntryResponseDto,
 } from './dto';
 
 export interface EntriesListResponse {
@@ -66,7 +67,8 @@ export class EntriesService {
         tx
           .select()
           .from(entries)
-          .where(and(...conditions)),
+          .where(and(...conditions))
+          .orderBy(entries.sortOrder),
         this.entitlementsService.getQuotaStatusInTx(tx, 'entries'),
       ]);
 
@@ -80,7 +82,7 @@ export class EntriesService {
     // Batch fetch files for all entries
     const entryIds = entryList.map((e) => e.id);
     const allFiles = await this.filesService.findByEntryIds(entryIds);
-    const filesByEntry = this.groupBy(allFiles, 'entryId');
+    const filesByEntry = groupBy(allFiles, 'entryId');
 
     // Build responses with files
     const data = await Promise.all(
@@ -132,9 +134,13 @@ export class EntriesService {
     return this.db.rls(async (tx) => {
       const existing = await this.findOneInTx(tx, id);
 
-      // Merge metadata if provided
+      // Merge metadata if provided (existing.metadata is always an object due to DB default)
+      const existingMetadata =
+        existing.metadata && typeof existing.metadata === 'object'
+          ? (existing.metadata as Record<string, unknown>)
+          : {};
       const updatedMetadata = updateEntryDto.metadata
-        ? { ...(existing.metadata as object), ...updateEntryDto.metadata }
+        ? { ...existingMetadata, ...updateEntryDto.metadata }
         : existing.metadata;
 
       const [updated] = await tx
@@ -182,19 +188,5 @@ export class EntriesService {
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
     };
-  }
-
-  /**
-   * Group array items by a key.
-   */
-  private groupBy<T>(arr: T[], key: keyof T): Record<string, T[]> {
-    return arr.reduce(
-      (acc, item) => {
-        const k = String(item[key]);
-        (acc[k] = acc[k] || []).push(item);
-        return acc;
-      },
-      {} as Record<string, T[]>,
-    );
   }
 }

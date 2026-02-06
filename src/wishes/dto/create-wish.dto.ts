@@ -13,7 +13,7 @@ import { metadataSchemaSchema } from '../../common/dto/metadata-schema';
  */
 export const createWishSchema = z.object({
   taskKey: z.string().min(1),
-  title: z.string().min(1),
+  title: z.string().min(1).nullish(),
   notes: z.string().optional().nullable(),
   sortOrder: z.number().int().optional().default(0),
   metadata: z.record(z.string(), z.unknown()).default({}),

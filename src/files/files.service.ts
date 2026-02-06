@@ -30,6 +30,8 @@ export type FileParent =
   | { type: 'entry'; id: string }
   | { type: 'wish'; id: string };
 
+type PillarType = 'important_info' | 'wishes';
+
 export interface UploadInitResult {
   fileId: string;
   uploadUrl?: string;
@@ -255,7 +257,11 @@ export class FilesService {
     dto: CompleteUploadDto,
   ): Promise<FileResponseDto> {
     const file = await this.db.rls(async (tx) => {
-      const existingFile = await this.findOneInTx(tx, fileId);
+      const existingFile = await this.findOneWithPillarCheck(
+        tx,
+        fileId,
+        'modify',
+      );
 
       if (existingFile.uploadStatus === 'complete') {
         return existingFile;
@@ -456,10 +462,11 @@ export class FilesService {
 
   /**
    * Find a single file by ID.
+   * Checks pillar view access based on file's parent.
    */
   async findOne(id: string): Promise<File> {
     return this.db.rls(async (tx) => {
-      return this.findOneInTx(tx, id);
+      return this.findOneWithPillarCheck(tx, id, 'view');
     });
   }
 
@@ -474,11 +481,40 @@ export class FilesService {
   }
 
   /**
+   * Determine which pillar a file belongs to based on its parent.
+   */
+  private getFilePillar(file: File): PillarType {
+    return file.entryId ? 'important_info' : 'wishes';
+  }
+
+  /**
+   * Find a file and verify pillar access.
+   * Used by file-scoped endpoints that need to check entitlements.
+   */
+  private async findOneWithPillarCheck(
+    tx: DrizzleTransaction,
+    id: string,
+    access: 'view' | 'modify',
+  ): Promise<File> {
+    const file = await this.findOneInTx(tx, id);
+    const pillar = this.getFilePillar(file);
+
+    if (access === 'view') {
+      await this.entitlements.requireViewPillarAccessInTx(tx, pillar);
+    } else {
+      await this.entitlements.requirePillarAccessInTx(tx, pillar);
+    }
+
+    return file;
+  }
+
+  /**
    * Get a download/playback URL for a file.
+   * Checks pillar view access based on file's parent.
    */
   async getDownloadUrl(id: string): Promise<DownloadUrlResult> {
     return this.db.rls(async (tx) => {
-      const file = await this.findOneInTx(tx, id);
+      const file = await this.findOneWithPillarCheck(tx, id, 'view');
 
       if (file.uploadStatus !== 'complete') {
         throw new BadRequestException('File upload is not complete');
@@ -513,13 +549,14 @@ export class FilesService {
 
   /**
    * Create a shareable link for a file.
+   * Checks pillar modify access based on file's parent.
    */
   async createShareLink(
     id: string,
     dto: CreateShareLinkDto,
   ): Promise<ShareLinkResult> {
     return this.db.rls(async (tx) => {
-      const file = await this.findOneInTx(tx, id);
+      const file = await this.findOneWithPillarCheck(tx, id, 'modify');
 
       if (file.uploadStatus !== 'complete') {
         throw new BadRequestException('File upload is not complete');
@@ -550,10 +587,11 @@ export class FilesService {
 
   /**
    * Revoke a shareable link for a file.
+   * Checks pillar modify access based on file's parent.
    */
   async revokeShareLink(id: string): Promise<File> {
     return this.db.rls(async (tx) => {
-      await this.findOneInTx(tx, id);
+      await this.findOneWithPillarCheck(tx, id, 'modify');
 
       const [updated] = await tx
         .update(files)
@@ -621,10 +659,11 @@ export class FilesService {
   /**
    * Delete a file.
    * Also deletes the file from R2 or Mux.
+   * Checks pillar modify access based on file's parent.
    */
   async remove(id: string): Promise<{ deleted: boolean }> {
     return this.db.rls(async (tx) => {
-      const file = await this.findOneInTx(tx, id);
+      const file = await this.findOneWithPillarCheck(tx, id, 'modify');
 
       // Delete from storage
       try {

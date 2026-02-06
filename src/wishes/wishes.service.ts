@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { MetadataSchema } from '../common/dto/metadata-schema';
+import { groupBy } from '../common/utils/array';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { EntitlementsService } from '../entitlements';
 import { FilesService } from '../files/files.service';
@@ -66,7 +67,8 @@ export class WishesService {
         tx
           .select()
           .from(wishes)
-          .where(and(...conditions)),
+          .where(and(...conditions))
+          .orderBy(wishes.sortOrder),
         this.entitlementsService.getQuotaStatusInTx(tx, 'wishes'),
       ]);
 
@@ -80,7 +82,7 @@ export class WishesService {
     // Batch fetch files for all wishes
     const wishIds = wishList.map((w) => w.id);
     const allFiles = await this.filesService.findByWishIds(wishIds);
-    const filesByWish = this.groupBy(allFiles, 'wishId');
+    const filesByWish = groupBy(allFiles, 'wishId');
 
     // Build responses with files
     const data = await Promise.all(
@@ -132,9 +134,13 @@ export class WishesService {
     return this.db.rls(async (tx) => {
       const existing = await this.findOneInTx(tx, id);
 
-      // Merge metadata if provided
+      // Merge metadata if provided (existing.metadata is always an object due to DB default)
+      const existingMetadata =
+        existing.metadata && typeof existing.metadata === 'object'
+          ? (existing.metadata as Record<string, unknown>)
+          : {};
       const updatedMetadata = updateWishDto.metadata
-        ? { ...(existing.metadata as object), ...updateWishDto.metadata }
+        ? { ...existingMetadata, ...updateWishDto.metadata }
         : existing.metadata;
 
       const [updated] = await tx
@@ -182,19 +188,5 @@ export class WishesService {
       createdAt: wish.createdAt,
       updatedAt: wish.updatedAt,
     };
-  }
-
-  /**
-   * Group array items by a key.
-   */
-  private groupBy<T>(arr: T[], key: keyof T): Record<string, T[]> {
-    return arr.reduce(
-      (acc, item) => {
-        const k = String(item[key]);
-        (acc[k] = acc[k] || []).push(item);
-        return acc;
-      },
-      {} as Record<string, T[]>,
-    );
   }
 }
