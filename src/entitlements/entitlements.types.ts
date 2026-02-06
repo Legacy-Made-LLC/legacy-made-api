@@ -8,6 +8,7 @@ export type Pillar =
 
 export type QuotaFeature =
   | 'entries' // Important Information items
+  | 'wishes' // Wishes & Guidance items
   | 'trusted_contacts' // People who can view your plan
   | 'family_profiles' // Additional family members on the plan
   | 'legacy_messages' // Written/audio/video messages

@@ -15,16 +15,18 @@ import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Public } from '../auth/auth.guard';
 import {
   EntitlementsGuard,
+  RequiresPillar,
   RequiresQuota,
+  RequiresViewPillar,
 } from '../entitlements/entitlements.guard';
+import {
+  CompleteUploadDto,
+  CreateShareLinkDto,
+  InitiateUploadDto,
+} from './dto';
 import { FilesService } from './files.service';
 import { MuxService } from './mux.service';
 import { ShareTokenPipe } from './share-token.pipe';
-import {
-  InitiateUploadDto,
-  CompleteUploadDto,
-  CreateShareLinkDto,
-} from './dto';
 
 @Controller()
 export class FilesController {
@@ -53,16 +55,20 @@ export class FilesController {
    */
   @Post('entries/:entryId/files/upload/init')
   @UseGuards(ThrottlerGuard, EntitlementsGuard)
+  @RequiresPillar('important_info')
   @RequiresQuota('storage_mb')
   @Throttle({
     short: { limit: 3, ttl: 1000 },
     medium: { limit: 20, ttl: 60000 },
   })
-  initiateUpload(
+  initiateEntryUpload(
     @Param('entryId', ParseUUIDPipe) entryId: string,
     @Body() dto: InitiateUploadDto,
   ) {
-    return this.filesService.initiateUpload(entryId, dto);
+    return this.filesService.initiateUpload(
+      { type: 'entry', id: entryId },
+      dto,
+    );
   }
 
   /**
@@ -71,21 +77,25 @@ export class FilesController {
    *
    * Rate limited: 3 requests/second, 20 requests/minute
    *
-   * Quota enforcement: See initiateUpload() for details on the two-level
+   * Quota enforcement: See initiateEntryUpload() for details on the two-level
    * quota check (guard for early rejection, service for precise enforcement).
    */
   @Post('entries/:entryId/files/video/init')
   @UseGuards(ThrottlerGuard, EntitlementsGuard)
+  @RequiresPillar('important_info')
   @RequiresQuota('storage_mb')
   @Throttle({
     short: { limit: 3, ttl: 1000 },
     medium: { limit: 20, ttl: 60000 },
   })
-  initiateVideoUpload(
+  initiateEntryVideoUpload(
     @Param('entryId', ParseUUIDPipe) entryId: string,
     @Body() dto: InitiateUploadDto,
   ) {
-    return this.filesService.initiateVideoUpload(entryId, dto);
+    return this.filesService.initiateVideoUpload(
+      { type: 'entry', id: entryId },
+      dto,
+    );
   }
 
   /**
@@ -93,8 +103,78 @@ export class FilesController {
    * GET /entries/:entryId/files
    */
   @Get('entries/:entryId/files')
+  @UseGuards(EntitlementsGuard)
+  @RequiresViewPillar('important_info')
   findAllForEntry(@Param('entryId', ParseUUIDPipe) entryId: string) {
     return this.filesService.findAllForEntry(entryId);
+  }
+
+  // =========================================================================
+  // Wish-scoped endpoints
+  // =========================================================================
+
+  /**
+   * Initiate a file upload to R2 for a wish.
+   * POST /wishes/:wishId/files/upload/init
+   *
+   * Rate limited: 3 requests/second, 20 requests/minute
+   *
+   * Quota enforcement happens at two levels:
+   * 1. Guard level (@RequiresQuota): Early rejection if user has zero quota
+   *    remaining (e.g., free tier or already at capacity).
+   * 2. Service level (requireFileSizeQuotaInTx): Precise check that the
+   *    specific file size fits within remaining quota.
+   */
+  @Post('wishes/:wishId/files/upload/init')
+  @UseGuards(ThrottlerGuard, EntitlementsGuard)
+  @RequiresPillar('wishes')
+  @RequiresQuota('storage_mb')
+  @Throttle({
+    short: { limit: 3, ttl: 1000 },
+    medium: { limit: 20, ttl: 60000 },
+  })
+  initiateWishUpload(
+    @Param('wishId', ParseUUIDPipe) wishId: string,
+    @Body() dto: InitiateUploadDto,
+  ) {
+    return this.filesService.initiateUpload({ type: 'wish', id: wishId }, dto);
+  }
+
+  /**
+   * Initiate a video upload to Mux for a wish.
+   * POST /wishes/:wishId/files/video/init
+   *
+   * Rate limited: 3 requests/second, 20 requests/minute
+   *
+   * Quota enforcement: See initiateWishUpload() for details.
+   */
+  @Post('wishes/:wishId/files/video/init')
+  @UseGuards(ThrottlerGuard, EntitlementsGuard)
+  @RequiresPillar('wishes')
+  @RequiresQuota('storage_mb')
+  @Throttle({
+    short: { limit: 3, ttl: 1000 },
+    medium: { limit: 20, ttl: 60000 },
+  })
+  initiateWishVideoUpload(
+    @Param('wishId', ParseUUIDPipe) wishId: string,
+    @Body() dto: InitiateUploadDto,
+  ) {
+    return this.filesService.initiateVideoUpload(
+      { type: 'wish', id: wishId },
+      dto,
+    );
+  }
+
+  /**
+   * List all files for a wish.
+   * GET /wishes/:wishId/files
+   */
+  @Get('wishes/:wishId/files')
+  @UseGuards(EntitlementsGuard)
+  @RequiresViewPillar('wishes')
+  findAllForWish(@Param('wishId', ParseUUIDPipe) wishId: string) {
+    return this.filesService.findAllForWish(wishId);
   }
 
   // =========================================================================
@@ -104,8 +184,11 @@ export class FilesController {
   /**
    * Complete a file upload.
    * POST /files/:id/complete
+   *
+   * Pillar access is checked at the service level based on file's parent.
    */
   @Post('files/:id/complete')
+  @UseGuards(EntitlementsGuard)
   completeUpload(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CompleteUploadDto,
@@ -116,8 +199,11 @@ export class FilesController {
   /**
    * Get file metadata.
    * GET /files/:id
+   *
+   * Pillar access is checked at the service level based on file's parent.
    */
   @Get('files/:id')
+  @UseGuards(EntitlementsGuard)
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.filesService.findOne(id);
   }
@@ -125,8 +211,11 @@ export class FilesController {
   /**
    * Get a download/playback URL for a file.
    * GET /files/:id/download
+   *
+   * Pillar access is checked at the service level based on file's parent.
    */
   @Get('files/:id/download')
+  @UseGuards(EntitlementsGuard)
   getDownloadUrl(@Param('id', ParseUUIDPipe) id: string) {
     return this.filesService.getDownloadUrl(id);
   }
@@ -134,8 +223,11 @@ export class FilesController {
   /**
    * Create a shareable link for a file.
    * POST /files/:id/share
+   *
+   * Pillar access is checked at the service level based on file's parent.
    */
   @Post('files/:id/share')
+  @UseGuards(EntitlementsGuard)
   createShareLink(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CreateShareLinkDto,
@@ -146,8 +238,11 @@ export class FilesController {
   /**
    * Revoke a shareable link for a file.
    * DELETE /files/:id/share
+   *
+   * Pillar access is checked at the service level based on file's parent.
    */
   @Delete('files/:id/share')
+  @UseGuards(EntitlementsGuard)
   revokeShareLink(@Param('id', ParseUUIDPipe) id: string) {
     return this.filesService.revokeShareLink(id);
   }
@@ -155,8 +250,11 @@ export class FilesController {
   /**
    * Delete a file.
    * DELETE /files/:id
+   *
+   * Pillar access is checked at the service level based on file's parent.
    */
   @Delete('files/:id')
+  @UseGuards(EntitlementsGuard)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.filesService.remove(id);
   }

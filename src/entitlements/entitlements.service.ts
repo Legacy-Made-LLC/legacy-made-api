@@ -3,7 +3,7 @@ import { count, eq, sum } from 'drizzle-orm';
 import { ClsService } from 'nestjs-cls';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiClsStore } from '../lib/types/cls';
-import { entries, files, plans, subscriptions } from '../schema';
+import { entries, files, plans, subscriptions, wishes } from '../schema';
 import {
   NON_EXPIRING_TIERS,
   PILLAR_DISPLAY_NAMES,
@@ -246,6 +246,16 @@ export class EntitlementsService {
         return result?.count ?? 0;
       }
 
+      case 'wishes': {
+        // Count all wishes across user's plans
+        const [result] = await tx
+          .select({ count: count() })
+          .from(wishes)
+          .innerJoin(plans, eq(wishes.planId, plans.id))
+          .where(eq(plans.userId, userId));
+        return result?.count ?? 0;
+      }
+
       case 'trusted_contacts':
         // TODO: Implement when trusted_contacts table exists
         return 0;
@@ -259,14 +269,24 @@ export class EntitlementsService {
         return 0;
 
       case 'storage_mb': {
-        // Sum file sizes across all user's entries (via entry → plan → user)
-        const [result] = await tx
+        // Sum file sizes across all user's entries and wishes
+        const [entryFilesResult] = await tx
           .select({ totalBytes: sum(files.sizeBytes) })
           .from(files)
           .innerJoin(entries, eq(files.entryId, entries.id))
           .innerJoin(plans, eq(entries.planId, plans.id))
           .where(eq(plans.userId, userId));
-        const totalBytes = Number(result?.totalBytes ?? 0);
+
+        const [wishFilesResult] = await tx
+          .select({ totalBytes: sum(files.sizeBytes) })
+          .from(files)
+          .innerJoin(wishes, eq(files.wishId, wishes.id))
+          .innerJoin(plans, eq(wishes.planId, plans.id))
+          .where(eq(plans.userId, userId));
+
+        const entryBytes = Number(entryFilesResult?.totalBytes ?? 0);
+        const wishBytes = Number(wishFilesResult?.totalBytes ?? 0);
+        const totalBytes = entryBytes + wishBytes;
         // Convert bytes to MB (quota is in MB)
         return Math.ceil(totalBytes / (1024 * 1024));
       }

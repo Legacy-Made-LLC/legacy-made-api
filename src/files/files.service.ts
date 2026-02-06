@@ -9,7 +9,7 @@ import { randomBytes } from 'crypto';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiConfigService } from '../config/api-config.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
-import { files, File, entries } from '../schema';
+import { files, File, entries, wishes } from '../schema';
 import { R2Service } from './r2.service';
 import { MuxService } from './mux.service';
 import {
@@ -21,6 +21,16 @@ import {
 
 // Part size for multipart uploads (100MB)
 const PART_SIZE = 100 * 1024 * 1024;
+
+/**
+ * Discriminated union for file parent reference.
+ * Files can be attached to either an entry or a wish.
+ */
+export type FileParent =
+  | { type: 'entry'; id: string }
+  | { type: 'wish'; id: string };
+
+type PillarType = 'important_info' | 'wishes';
 
 export interface UploadInitResult {
   fileId: string;
@@ -68,26 +78,19 @@ export class FilesService {
   ) {}
 
   /**
-   * Initiate an R2 file upload.
+   * Initiate an R2 file upload for an entry or wish.
    * Returns presigned URLs for direct upload to R2.
    */
   async initiateUpload(
-    entryId: string,
+    parent: FileParent,
     dto: InitiateUploadDto,
   ): Promise<UploadInitResult> {
     const multipartThreshold = this.config.get('MULTIPART_THRESHOLD_BYTES');
     const isMultipart = dto.sizeBytes > multipartThreshold;
 
     return this.db.rls(async (tx) => {
-      // Verify entry exists and user has access (RLS will enforce ownership)
-      const [entry] = await tx
-        .select({ id: entries.id })
-        .from(entries)
-        .where(eq(entries.id, entryId));
-
-      if (!entry) {
-        throw new NotFoundException(`Entry with id ${entryId} not found`);
-      }
+      // Verify parent exists and user has access (RLS will enforce ownership)
+      await this.verifyParentExists(tx, parent);
 
       // Verify storage quota is sufficient for this specific file size.
       // This is the authoritative check - the controller's @RequiresQuota guard
@@ -98,11 +101,12 @@ export class FilesService {
       await this.entitlements.requireFileSizeQuotaInTx(tx, dto.sizeBytes);
 
       // Create file record
-      const storageKey = this.generateStorageKey(entryId, dto.filename);
+      const storageKey = this.generateStorageKey(parent, dto.filename);
       const [file] = await tx
         .insert(files)
         .values({
-          entryId,
+          entryId: parent.type === 'entry' ? parent.id : undefined,
+          wishId: parent.type === 'wish' ? parent.id : undefined,
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
@@ -158,23 +162,16 @@ export class FilesService {
   }
 
   /**
-   * Initiate a Mux video upload.
+   * Initiate a Mux video upload for an entry or wish.
    * Returns a direct upload URL for uploading video to Mux.
    */
   async initiateVideoUpload(
-    entryId: string,
+    parent: FileParent,
     dto: InitiateUploadDto,
   ): Promise<VideoUploadInitResult> {
     return this.db.rls(async (tx) => {
-      // Verify entry exists and user has access (RLS will enforce ownership)
-      const [entry] = await tx
-        .select({ id: entries.id })
-        .from(entries)
-        .where(eq(entries.id, entryId));
-
-      if (!entry) {
-        throw new NotFoundException(`Entry with id ${entryId} not found`);
-      }
+      // Verify parent exists and user has access (RLS will enforce ownership)
+      await this.verifyParentExists(tx, parent);
 
       // Verify storage quota is sufficient for this specific file size.
       // See initiateUpload() for details on the two-level quota enforcement.
@@ -184,7 +181,8 @@ export class FilesService {
       const [file] = await tx
         .insert(files)
         .values({
-          entryId,
+          entryId: parent.type === 'entry' ? parent.id : undefined,
+          wishId: parent.type === 'wish' ? parent.id : undefined,
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
@@ -219,19 +217,61 @@ export class FilesService {
   }
 
   /**
+   * Verify that a parent (entry or wish) exists.
+   * RLS will enforce ownership.
+   */
+  private async verifyParentExists(
+    tx: DrizzleTransaction,
+    parent: FileParent,
+  ): Promise<void> {
+    if (parent.type === 'entry') {
+      const [entry] = await tx
+        .select({ id: entries.id })
+        .from(entries)
+        .where(eq(entries.id, parent.id));
+
+      if (!entry) {
+        throw new NotFoundException(`Entry with id ${parent.id} not found`);
+      }
+    } else {
+      const [wish] = await tx
+        .select({ id: wishes.id })
+        .from(wishes)
+        .where(eq(wishes.id, parent.id));
+
+      if (!wish) {
+        throw new NotFoundException(`Wish with id ${parent.id} not found`);
+      }
+    }
+  }
+
+  /**
    * Complete an upload after the client has finished uploading.
    * For R2 multipart uploads, this finalizes the upload.
    * For R2 single uploads and Mux, this marks the file as complete.
+   *
+   * Returns the file with signed URLs for immediate access.
    */
-  async completeUpload(fileId: string, dto: CompleteUploadDto): Promise<File> {
-    return this.db.rls(async (tx) => {
-      const file = await this.findOneInTx(tx, fileId);
+  async completeUpload(
+    fileId: string,
+    dto: CompleteUploadDto,
+  ): Promise<FileResponseDto> {
+    const file = await this.db.rls(async (tx) => {
+      const existingFile = await this.findOneWithPillarCheck(
+        tx,
+        fileId,
+        'modify',
+      );
 
-      if (file.uploadStatus === 'complete') {
-        return file;
+      if (existingFile.uploadStatus === 'complete') {
+        return existingFile;
       }
 
-      if (file.storageType === 'r2' && dto.parts && dto.parts.length > 0) {
+      if (
+        existingFile.storageType === 'r2' &&
+        dto.parts &&
+        dto.parts.length > 0
+      ) {
         // Complete multipart upload
         if (!dto.uploadId) {
           throw new BadRequestException(
@@ -239,7 +279,7 @@ export class FilesService {
           );
         }
         await this.r2.completeMultipartUpload(
-          file.storageKey,
+          existingFile.storageKey,
           dto.uploadId,
           dto.parts,
         );
@@ -253,6 +293,8 @@ export class FilesService {
 
       return updated;
     });
+
+    return this.toFileResponse(file);
   }
 
   /**
@@ -276,6 +318,31 @@ export class FilesService {
         .select()
         .from(files)
         .where(inArray(files.entryId, entryIds))
+        .orderBy(files.createdAt);
+    });
+  }
+
+  /**
+   * List files for a wish.
+   */
+  async findAllForWish(wishId: string): Promise<File[]> {
+    return this.db.rls(async (tx) => {
+      return tx.select().from(files).where(eq(files.wishId, wishId));
+    });
+  }
+
+  /**
+   * Find files for multiple wishes (batch fetch).
+   * Used when including files in wish list responses.
+   */
+  async findByWishIds(wishIds: string[]): Promise<File[]> {
+    if (wishIds.length === 0) return [];
+
+    return this.db.rls(async (tx) => {
+      return tx
+        .select()
+        .from(files)
+        .where(inArray(files.wishId, wishIds))
         .orderBy(files.createdAt);
     });
   }
@@ -395,10 +462,11 @@ export class FilesService {
 
   /**
    * Find a single file by ID.
+   * Checks pillar view access based on file's parent.
    */
   async findOne(id: string): Promise<File> {
     return this.db.rls(async (tx) => {
-      return this.findOneInTx(tx, id);
+      return this.findOneWithPillarCheck(tx, id, 'view');
     });
   }
 
@@ -413,11 +481,40 @@ export class FilesService {
   }
 
   /**
+   * Determine which pillar a file belongs to based on its parent.
+   */
+  private getFilePillar(file: File): PillarType {
+    return file.entryId ? 'important_info' : 'wishes';
+  }
+
+  /**
+   * Find a file and verify pillar access.
+   * Used by file-scoped endpoints that need to check entitlements.
+   */
+  private async findOneWithPillarCheck(
+    tx: DrizzleTransaction,
+    id: string,
+    access: 'view' | 'modify',
+  ): Promise<File> {
+    const file = await this.findOneInTx(tx, id);
+    const pillar = this.getFilePillar(file);
+
+    if (access === 'view') {
+      await this.entitlements.requireViewPillarAccessInTx(tx, pillar);
+    } else {
+      await this.entitlements.requirePillarAccessInTx(tx, pillar);
+    }
+
+    return file;
+  }
+
+  /**
    * Get a download/playback URL for a file.
+   * Checks pillar view access based on file's parent.
    */
   async getDownloadUrl(id: string): Promise<DownloadUrlResult> {
     return this.db.rls(async (tx) => {
-      const file = await this.findOneInTx(tx, id);
+      const file = await this.findOneWithPillarCheck(tx, id, 'view');
 
       if (file.uploadStatus !== 'complete') {
         throw new BadRequestException('File upload is not complete');
@@ -452,13 +549,14 @@ export class FilesService {
 
   /**
    * Create a shareable link for a file.
+   * Checks pillar modify access based on file's parent.
    */
   async createShareLink(
     id: string,
     dto: CreateShareLinkDto,
   ): Promise<ShareLinkResult> {
     return this.db.rls(async (tx) => {
-      const file = await this.findOneInTx(tx, id);
+      const file = await this.findOneWithPillarCheck(tx, id, 'modify');
 
       if (file.uploadStatus !== 'complete') {
         throw new BadRequestException('File upload is not complete');
@@ -489,10 +587,11 @@ export class FilesService {
 
   /**
    * Revoke a shareable link for a file.
+   * Checks pillar modify access based on file's parent.
    */
   async revokeShareLink(id: string): Promise<File> {
     return this.db.rls(async (tx) => {
-      await this.findOneInTx(tx, id);
+      await this.findOneWithPillarCheck(tx, id, 'modify');
 
       const [updated] = await tx
         .update(files)
@@ -560,10 +659,11 @@ export class FilesService {
   /**
    * Delete a file.
    * Also deletes the file from R2 or Mux.
+   * Checks pillar modify access based on file's parent.
    */
   async remove(id: string): Promise<{ deleted: boolean }> {
     return this.db.rls(async (tx) => {
-      const file = await this.findOneInTx(tx, id);
+      const file = await this.findOneWithPillarCheck(tx, id, 'modify');
 
       // Delete from storage
       try {
@@ -700,11 +800,13 @@ export class FilesService {
 
   /**
    * Generate a unique storage key for a file.
+   * Path format: {entries|wishes}/{parentId}/{timestamp}-{random}.{ext}
    */
-  private generateStorageKey(entryId: string, filename: string): string {
+  private generateStorageKey(parent: FileParent, filename: string): string {
     const timestamp = Date.now();
     const random = randomBytes(8).toString('hex');
     const ext = filename.includes('.') ? filename.split('.').pop() : '';
-    return `entries/${entryId}/${timestamp}-${random}${ext ? `.${ext}` : ''}`;
+    const prefix = parent.type === 'entry' ? 'entries' : 'wishes';
+    return `${prefix}/${parent.id}/${timestamp}-${random}${ext ? `.${ext}` : ''}`;
   }
 }

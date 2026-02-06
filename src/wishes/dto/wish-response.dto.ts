@@ -1,13 +1,13 @@
-import { MetadataSchema } from '../../common/dto/metadata-schema';
 import { FileResponseDto } from '../../files/dto';
+import { MetadataSchema } from '../../common/dto/metadata-schema';
 
 /**
- * Response DTO for entries with files included.
+ * Response DTO for wishes with files included.
  *
- * This is returned by GET /entries/:id and GET /entries endpoints
- * when files are fetched along with entries.
+ * This is returned by GET /wishes/:id and GET /wishes endpoints
+ * when files are fetched along with wishes.
  */
-export interface EntryResponseDto {
+export interface WishResponseDto {
   id: string;
   planId: string;
   taskKey: string;

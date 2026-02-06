@@ -212,6 +212,7 @@ export const entries = pgTable(
 
     // Category-specific data
     metadata: jsonb('metadata').default({}).notNull(),
+    metadataSchema: jsonb('metadata_schema'),
 
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -231,13 +232,60 @@ export const entries = pgTable(
 ).enableRLS();
 
 // =============================================================================
+// WISHES
+// =============================================================================
+
+/**
+ * Wishes table - storage for wishes and guidance items
+ *
+ * Similar to entries but for the "Wishes & Guidance" pillar.
+ * The taskKey identifies the wish type (controlled by frontend).
+ * Metadata is a flexible JSONB field for type-specific data.
+ */
+export const wishes = pgTable(
+  'wishes',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    planId: uuid('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+
+    // Common fields
+    taskKey: text('task_key').notNull(),
+    title: text('title'), // Display name / summary (optional)
+    notes: text('notes'), // General notes (optional)
+    sortOrder: integer('sort_order').default(0).notNull(),
+
+    // Category-specific data
+    metadata: jsonb('metadata').default({}).notNull(),
+    metadataSchema: jsonb('metadata_schema'),
+
+    // Timestamps
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index('wishes_plan_id_idx').on(table.planId),
+    index('wishes_task_key_idx').on(table.planId, table.taskKey),
+    shouldBypassRlsPolicy(),
+    userOwnsPlanPolicy(table.planId),
+  ],
+).enableRLS();
+
+// =============================================================================
 // FILES
 // =============================================================================
 
 /**
  * Files table - stores metadata for uploaded files
  *
- * Files are attached to entries (e.g., a document scan for a will entry).
+ * Files can be attached to entries or wishes (polymorphic relationship).
+ * Exactly one of entryId or wishId must be set.
  * Actual file storage is in Cloudflare R2 (documents, images, audio) or Mux (video).
  *
  * RLS policies ensure users can only access files belonging to their plans.
@@ -246,9 +294,13 @@ export const files = pgTable(
   'files',
   {
     id: uuid('id').defaultRandom().primaryKey(),
-    entryId: uuid('entry_id')
-      .notNull()
-      .references(() => entries.id, { onDelete: 'cascade' }),
+    // Polymorphic: exactly one of entryId or wishId must be set
+    entryId: uuid('entry_id').references(() => entries.id, {
+      onDelete: 'cascade',
+    }),
+    wishId: uuid('wish_id').references(() => wishes.id, {
+      onDelete: 'cascade',
+    }),
 
     // File metadata
     filename: text('filename').notNull(),
@@ -281,24 +333,47 @@ export const files = pgTable(
   },
   (table) => [
     index('files_entry_id_idx').on(table.entryId),
+    index('files_wish_id_idx').on(table.wishId),
     index('files_share_token_idx').on(table.shareToken),
     shouldBypassRlsPolicy(),
     crudPolicy({
       role: 'public',
       read: sql`
-        EXISTS (
-          SELECT 1 FROM entries e
-          JOIN plans p ON p.id = e.plan_id
-          WHERE e.id = ${table.entryId}
-          AND p.user_id = current_setting('app.user_id', true)
+        (
+          ${table.entryId} IS NOT NULL AND EXISTS (
+            SELECT 1 FROM entries e
+            JOIN plans p ON p.id = e.plan_id
+            WHERE e.id = ${table.entryId}
+            AND p.user_id = current_setting('app.user_id', true)
+          )
+        )
+        OR
+        (
+          ${table.wishId} IS NOT NULL AND EXISTS (
+            SELECT 1 FROM wishes w
+            JOIN plans p ON p.id = w.plan_id
+            WHERE w.id = ${table.wishId}
+            AND p.user_id = current_setting('app.user_id', true)
+          )
         )
       `,
       modify: sql`
-        EXISTS (
-          SELECT 1 FROM entries e
-          JOIN plans p ON p.id = e.plan_id
-          WHERE e.id = ${table.entryId}
-          AND p.user_id = current_setting('app.user_id', true)
+        (
+          ${table.entryId} IS NOT NULL AND EXISTS (
+            SELECT 1 FROM entries e
+            JOIN plans p ON p.id = e.plan_id
+            WHERE e.id = ${table.entryId}
+            AND p.user_id = current_setting('app.user_id', true)
+          )
+        )
+        OR
+        (
+          ${table.wishId} IS NOT NULL AND EXISTS (
+            SELECT 1 FROM wishes w
+            JOIN plans p ON p.id = w.plan_id
+            WHERE w.id = ${table.wishId}
+            AND p.user_id = current_setting('app.user_id', true)
+          )
         )
       `,
     }),
@@ -320,6 +395,9 @@ export type NewPlan = typeof plans.$inferInsert;
 
 export type Entry = typeof entries.$inferSelect;
 export type NewEntry = typeof entries.$inferInsert;
+
+export type Wish = typeof wishes.$inferSelect;
+export type NewWish = typeof wishes.$inferInsert;
 
 export type File = typeof files.$inferSelect;
 export type NewFile = typeof files.$inferInsert;

@@ -107,6 +107,7 @@ describe('EntitlementsService', () => {
       ]);
       expect(freeConfig.quotas).toEqual({
         entries: 5,
+        wishes: 0,
         trusted_contacts: 0,
         family_profiles: 0,
         legacy_messages: 0,
@@ -128,6 +129,7 @@ describe('EntitlementsService', () => {
       expect(individualConfig.viewOnlyPillars).toEqual([]);
       expect(individualConfig.quotas).toEqual({
         entries: -1, // unlimited
+        wishes: -1, // unlimited
         trusted_contacts: 1,
         family_profiles: 0,
         legacy_messages: -1, // unlimited
@@ -149,6 +151,7 @@ describe('EntitlementsService', () => {
       expect(familyConfig.viewOnlyPillars).toEqual([]);
       expect(familyConfig.quotas).toEqual({
         entries: -1, // unlimited
+        wishes: -1, // unlimited
         trusted_contacts: -1, // unlimited
         family_profiles: 4, // 5 total - 1 primary
         legacy_messages: -1, // unlimited
@@ -506,7 +509,7 @@ describe('EntitlementsService', () => {
         'messages',
         'family_access',
       ]);
-      expect(info.quotas).toHaveLength(5);
+      expect(info.quotas).toHaveLength(6);
 
       const entriesQuota = info.quotas.find((q) => q.feature === 'entries');
       expect(entriesQuota).toMatchObject({

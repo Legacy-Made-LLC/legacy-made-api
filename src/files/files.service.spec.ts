@@ -70,6 +70,8 @@ describe('FilesService', () => {
 
     mockEntitlementsService = {
       requireFileSizeQuotaInTx: jest.fn().mockResolvedValue(undefined),
+      requirePillarAccessInTx: jest.fn().mockResolvedValue(undefined),
+      requireViewPillarAccessInTx: jest.fn().mockResolvedValue(undefined),
     };
 
     const mockApiConfigService = {
