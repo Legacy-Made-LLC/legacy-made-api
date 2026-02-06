@@ -8,6 +8,7 @@ import { z } from 'zod';
 export const fieldSchemaSchema = z.object({
   label: z.string().min(1),
   order: z.number().int().nonnegative(),
+  type: z.enum(['string', 'date']).default('string'),
   valueLabels: z.record(z.string(), z.string()).optional(),
 });
 
