@@ -7,9 +7,12 @@ import {
   ParseUUIDPipe,
   Put,
 } from '@nestjs/common';
+import { ParseKeyPipe } from '../common/parse-key.pipe';
 import { UpsertProgressDto } from './dto';
 import { ProgressService } from './progress.service';
 
+// No EntitlementsGuard — progress is cross-cutting UI state, not a gated pillar.
+// RLS still enforces plan ownership via app.user_id.
 @Controller('plans/:planId/progress')
 export class ProgressController {
   constructor(private readonly progressService: ProgressService) {}
@@ -21,7 +24,7 @@ export class ProgressController {
   @Put(':key')
   upsert(
     @Param('planId', ParseUUIDPipe) planId: string,
-    @Param('key') key: string,
+    @Param('key', ParseKeyPipe) key: string,
     @Body() dto: UpsertProgressDto,
   ) {
     return this.progressService.upsert(planId, key, dto);
@@ -43,7 +46,7 @@ export class ProgressController {
   @Get(':key')
   findOne(
     @Param('planId', ParseUUIDPipe) planId: string,
-    @Param('key') key: string,
+    @Param('key', ParseKeyPipe) key: string,
   ) {
     return this.progressService.findOne(planId, key);
   }
@@ -55,7 +58,7 @@ export class ProgressController {
   @Delete(':key')
   remove(
     @Param('planId', ParseUUIDPipe) planId: string,
-    @Param('key') key: string,
+    @Param('key', ParseKeyPipe) key: string,
   ) {
     return this.progressService.remove(planId, key);
   }
