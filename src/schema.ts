@@ -24,6 +24,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -278,6 +279,42 @@ export const wishes = pgTable(
 ).enableRLS();
 
 // =============================================================================
+// PROGRESS
+// =============================================================================
+
+/**
+ * Progress table - key-value store for tracking plan task completion
+ *
+ * Each (planId, key) pair maps to a JSONB data object containing arbitrary
+ * progress state. Used by the frontend to persist user progress as they
+ * work through plan tasks (e.g., which entries/wishes are complete).
+ */
+export const progress = pgTable(
+  'progress',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    planId: uuid('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    data: jsonb('data').default({}).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('progress_plan_id_key_idx').on(table.planId, table.key),
+    index('progress_plan_id_idx').on(table.planId),
+    shouldBypassRlsPolicy(),
+    userOwnsPlanPolicy(table.planId),
+  ],
+).enableRLS();
+
+// =============================================================================
 // FILES
 // =============================================================================
 
@@ -398,6 +435,9 @@ export type NewEntry = typeof entries.$inferInsert;
 
 export type Wish = typeof wishes.$inferSelect;
 export type NewWish = typeof wishes.$inferInsert;
+
+export type Progress = typeof progress.$inferSelect;
+export type NewProgress = typeof progress.$inferInsert;
 
 export type File = typeof files.$inferSelect;
 export type NewFile = typeof files.$inferInsert;

@@ -15,6 +15,7 @@ import { PlansModule } from './plans/plans.module';
 import { UsersModule } from './users/users.module';
 import { FilesModule } from './files/files.module';
 import { WishesModule } from './wishes/wishes.module';
+import { ProgressModule } from './progress/progress.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { WishesModule } from './wishes/wishes.module';
     HealthModule,
     FilesModule,
     WishesModule,
+    ProgressModule,
   ],
   providers: [
     {
