@@ -34,6 +34,14 @@ export const configSchema = z.object({
   MUX_SIGNING_KEY_SECRET: z.string(),
   MUX_WEBHOOK_SECRET: z.string(),
 
+  // RESEND (Email Service)
+  RESEND_API_KEY: z.string(),
+  RESEND_FROM_EMAIL: z.string().email(),
+  RESEND_FROM_NAME: z.string().default('Legacy Made'),
+
+  // INVITATION TOKENS
+  INVITATION_TOKEN_SECRET: z.string(),
+
   // FILE UPLOAD
   MAX_FILE_SIZE_BYTES: z.coerce
     .number()

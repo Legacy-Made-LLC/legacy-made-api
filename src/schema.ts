@@ -58,6 +58,49 @@ const userOwnsPlanPolicy = (planIdColumn: AnyPgColumn) =>
   });
 
 /**
+ * Returns SQL expression that checks if the current user has trusted contact
+ * access to a plan with one of the specified access levels.
+ *
+ * Only matches contacts that are:
+ * - accepted (access_status = 'accepted')
+ * - immediate access (access_timing = 'immediate')
+ * - at one of the specified access levels
+ *
+ * NOTE: accessLevels are compile-time constants, safe to embed via sql.raw().
+ */
+const userHasAccessToPlan = (
+  planIdColumn: AnyPgColumn,
+  accessLevels: string[],
+) => {
+  const levelsList = accessLevels.map((l) => `'${l}'`).join(', ');
+  return sql`
+    EXISTS (
+      SELECT 1 FROM trusted_contacts
+      WHERE trusted_contacts.plan_id = ${planIdColumn}
+      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)
+      AND trusted_contacts.access_status = 'accepted'
+      AND trusted_contacts.access_timing = 'immediate'
+      AND trusted_contacts.access_level IN (${sql.raw(levelsList)})
+    )
+  `;
+};
+
+/**
+ * Combined read policy: user owns the plan OR is an accepted trusted contact
+ * with one of the specified access levels.
+ */
+const ownerOrTrustedContactPolicy = (
+  planIdColumn: AnyPgColumn,
+  readAccessLevels: string[],
+  writeAccessLevels: string[] = ['full_edit'],
+) =>
+  crudPolicy({
+    role: 'public',
+    read: sql`(${userOwnsPlan(planIdColumn)}) OR (${userHasAccessToPlan(planIdColumn, readAccessLevels)})`,
+    modify: sql`(${userOwnsPlan(planIdColumn)}) OR (${userHasAccessToPlan(planIdColumn, writeAccessLevels)})`,
+  });
+
+/**
  * Direct user ownership check for tables with user_id column
  * NOTE: Uses raw SQL string to avoid circular initialization issues
  */
@@ -95,6 +138,7 @@ export const users = pgTable(
   'users',
   {
     id: text('id').primaryKey(), // Clerk user ID
+    email: text('email'),
     firstName: text('first_name'),
     lastName: text('last_name'),
     avatarUrl: text('avatar_url'),
@@ -215,6 +259,9 @@ export const entries = pgTable(
     metadata: jsonb('metadata').default({}).notNull(),
     metadataSchema: jsonb('metadata_schema'),
 
+    // Audit trail - tracks who last modified this entry
+    modifiedBy: text('modified_by').references(() => users.id),
+
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
@@ -228,7 +275,7 @@ export const entries = pgTable(
     index('entries_plan_id_idx').on(table.planId),
     index('entries_category_idx').on(table.planId, table.taskKey),
     shouldBypassRlsPolicy(),
-    userOwnsPlanPolicy(table.planId),
+    ownerOrTrustedContactPolicy(table.planId, ['full_edit', 'full_view']),
   ],
 ).enableRLS();
 
@@ -261,6 +308,9 @@ export const wishes = pgTable(
     metadata: jsonb('metadata').default({}).notNull(),
     metadataSchema: jsonb('metadata_schema'),
 
+    // Audit trail - tracks who last modified this wish
+    modifiedBy: text('modified_by').references(() => users.id),
+
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
@@ -274,7 +324,64 @@ export const wishes = pgTable(
     index('wishes_plan_id_idx').on(table.planId),
     index('wishes_task_key_idx').on(table.planId, table.taskKey),
     shouldBypassRlsPolicy(),
-    userOwnsPlanPolicy(table.planId),
+    ownerOrTrustedContactPolicy(table.planId, [
+      'full_edit',
+      'full_view',
+      'limited_view',
+    ]),
+  ],
+).enableRLS();
+
+// =============================================================================
+// MESSAGES
+// =============================================================================
+
+/**
+ * Messages table - storage for legacy messages
+ *
+ * Similar to entries and wishes but for the "Messages" pillar.
+ * The taskKey identifies the message type (controlled by frontend).
+ * Metadata is a flexible JSONB field for type-specific data.
+ */
+export const messages = pgTable(
+  'messages',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    planId: uuid('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+
+    // Common fields
+    taskKey: text('task_key').notNull(),
+    title: text('title'), // Display name / summary (optional)
+    notes: text('notes'), // General notes (optional)
+    sortOrder: integer('sort_order').default(0).notNull(),
+
+    // Category-specific data
+    metadata: jsonb('metadata').default({}).notNull(),
+    metadataSchema: jsonb('metadata_schema'),
+
+    // Audit trail - tracks who last modified this message
+    modifiedBy: text('modified_by').references(() => users.id),
+
+    // Timestamps
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index('messages_plan_id_idx').on(table.planId),
+    index('messages_task_key_idx').on(table.planId, table.taskKey),
+    shouldBypassRlsPolicy(),
+    ownerOrTrustedContactPolicy(table.planId, [
+      'full_edit',
+      'full_view',
+      'limited_view',
+    ]),
   ],
 ).enableRLS();
 
@@ -315,14 +422,139 @@ export const progress = pgTable(
 ).enableRLS();
 
 // =============================================================================
+// TRUSTED CONTACTS
+// =============================================================================
+
+/**
+ * Trusted Contacts table - manages family access to plans
+ *
+ * Allows plan owners to grant access to their plan to other users.
+ * Supports multiple access levels (full_edit, full_view, limited_view, view_only)
+ * and timing modes (immediate, upon_passing).
+ *
+ * When a trusted contact accepts, their clerk_user_id is set, enabling
+ * RLS policies to grant them access to the plan's data based on access_level.
+ */
+export const trustedContacts = pgTable(
+  'trusted_contacts',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    planId: uuid('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+
+    // Contact information
+    email: text('email').notNull(),
+    firstName: text('first_name').notNull(),
+    lastName: text('last_name').notNull(),
+    relationship: text('relationship'), // Free text (spouse, child, attorney, etc.)
+
+    // Access configuration
+    accessLevel: text('access_level').notNull(), // 'full_edit' | 'full_view' | 'limited_view' | 'view_only'
+    accessTiming: text('access_timing').notNull(), // 'immediate' | 'upon_passing'
+    accessStatus: text('access_status').notNull().default('pending'), // 'pending' | 'accepted' | 'declined' | 'revoked_by_owner' | 'revoked_by_contact'
+
+    // Linked user (set when invitation is accepted)
+    clerkUserId: text('clerk_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+
+    // Status timestamps
+    invitedAt: timestamp('invited_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    declinedAt: timestamp('declined_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+
+    // Plan owner's private notes about this contact
+    notes: text('notes'),
+
+    // Standard timestamps
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index('trusted_contacts_plan_id_idx').on(table.planId),
+    index('trusted_contacts_clerk_user_id_idx').on(table.clerkUserId),
+    index('trusted_contacts_email_idx').on(table.email),
+    shouldBypassRlsPolicy(),
+    // Plan owners can fully manage their trusted contacts
+    userOwnsPlanPolicy(table.planId),
+    // Trusted contacts can read their own record (needed for RLS subqueries
+    // on entries/wishes/messages that check trusted contact access)
+    pgPolicy('trusted_contacts_self_read', {
+      for: 'select',
+      to: 'public',
+      using: sql`${table.clerkUserId} = current_setting('app.user_id', true)`,
+    }),
+  ],
+).enableRLS();
+
+// =============================================================================
+// PLAN ACTIVITY LOG
+// =============================================================================
+
+/**
+ * Plan Activity Log table - audit trail for plan modifications
+ *
+ * Tracks who (owner or trusted contact) performed what action on plan data.
+ * Critical for accountability when multiple users have edit access to a plan.
+ */
+export const planActivityLog = pgTable(
+  'plan_activity_log',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    planId: uuid('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+
+    // Actor information
+    actorUserId: text('actor_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    actorType: text('actor_type').notNull(), // 'owner' | 'trusted_contact'
+
+    // Action details
+    action: text('action').notNull(), // 'created' | 'updated' | 'deleted'
+    resourceType: text('resource_type').notNull(), // 'entry' | 'wish' | 'message' | 'trusted_contact'
+    resourceId: uuid('resource_id'), // ID of the modified resource (nullable for bulk operations)
+
+    // Optional metadata (old/new values, etc.)
+    details: jsonb('details'),
+
+    // Timestamp
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index('plan_activity_log_plan_id_idx').on(table.planId),
+    index('plan_activity_log_actor_user_id_idx').on(table.actorUserId),
+    index('plan_activity_log_resource_idx').on(
+      table.resourceType,
+      table.resourceId,
+    ),
+    shouldBypassRlsPolicy(),
+    // Only plan owners can read activity logs
+    userOwnsPlanPolicy(table.planId),
+  ],
+).enableRLS();
+
+// =============================================================================
 // FILES
 // =============================================================================
 
 /**
  * Files table - stores metadata for uploaded files
  *
- * Files can be attached to entries or wishes (polymorphic relationship).
- * Exactly one of entryId or wishId must be set.
+ * Files can be attached to entries, wishes, or messages (polymorphic relationship).
+ * Exactly one of entryId, wishId, or messageId must be set.
  * Actual file storage is in Cloudflare R2 (documents, images, audio) or Mux (video).
  *
  * RLS policies ensure users can only access files belonging to their plans.
@@ -331,11 +563,14 @@ export const files = pgTable(
   'files',
   {
     id: uuid('id').defaultRandom().primaryKey(),
-    // Polymorphic: exactly one of entryId or wishId must be set
+    // Polymorphic: exactly one of entryId, wishId, or messageId must be set
     entryId: uuid('entry_id').references(() => entries.id, {
       onDelete: 'cascade',
     }),
     wishId: uuid('wish_id').references(() => wishes.id, {
+      onDelete: 'cascade',
+    }),
+    messageId: uuid('message_id').references(() => messages.id, {
       onDelete: 'cascade',
     }),
 
@@ -371,6 +606,7 @@ export const files = pgTable(
   (table) => [
     index('files_entry_id_idx').on(table.entryId),
     index('files_wish_id_idx').on(table.wishId),
+    index('files_message_id_idx').on(table.messageId),
     index('files_share_token_idx').on(table.shareToken),
     shouldBypassRlsPolicy(),
     crudPolicy({
@@ -381,7 +617,17 @@ export const files = pgTable(
             SELECT 1 FROM entries e
             JOIN plans p ON p.id = e.plan_id
             WHERE e.id = ${table.entryId}
-            AND p.user_id = current_setting('app.user_id', true)
+            AND (
+              p.user_id = current_setting('app.user_id', true)
+              OR EXISTS (
+                SELECT 1 FROM trusted_contacts tc
+                WHERE tc.plan_id = e.plan_id
+                AND tc.clerk_user_id = current_setting('app.user_id', true)
+                AND tc.access_status = 'accepted'
+                AND tc.access_timing = 'immediate'
+                AND tc.access_level IN ('full_edit', 'full_view')
+              )
+            )
           )
         )
         OR
@@ -390,7 +636,36 @@ export const files = pgTable(
             SELECT 1 FROM wishes w
             JOIN plans p ON p.id = w.plan_id
             WHERE w.id = ${table.wishId}
-            AND p.user_id = current_setting('app.user_id', true)
+            AND (
+              p.user_id = current_setting('app.user_id', true)
+              OR EXISTS (
+                SELECT 1 FROM trusted_contacts tc
+                WHERE tc.plan_id = w.plan_id
+                AND tc.clerk_user_id = current_setting('app.user_id', true)
+                AND tc.access_status = 'accepted'
+                AND tc.access_timing = 'immediate'
+                AND tc.access_level IN ('full_edit', 'full_view', 'limited_view')
+              )
+            )
+          )
+        )
+        OR
+        (
+          ${table.messageId} IS NOT NULL AND EXISTS (
+            SELECT 1 FROM messages m
+            JOIN plans p ON p.id = m.plan_id
+            WHERE m.id = ${table.messageId}
+            AND (
+              p.user_id = current_setting('app.user_id', true)
+              OR EXISTS (
+                SELECT 1 FROM trusted_contacts tc
+                WHERE tc.plan_id = m.plan_id
+                AND tc.clerk_user_id = current_setting('app.user_id', true)
+                AND tc.access_status = 'accepted'
+                AND tc.access_timing = 'immediate'
+                AND tc.access_level IN ('full_edit', 'full_view', 'limited_view')
+              )
+            )
           )
         )
       `,
@@ -400,7 +675,17 @@ export const files = pgTable(
             SELECT 1 FROM entries e
             JOIN plans p ON p.id = e.plan_id
             WHERE e.id = ${table.entryId}
-            AND p.user_id = current_setting('app.user_id', true)
+            AND (
+              p.user_id = current_setting('app.user_id', true)
+              OR EXISTS (
+                SELECT 1 FROM trusted_contacts tc
+                WHERE tc.plan_id = e.plan_id
+                AND tc.clerk_user_id = current_setting('app.user_id', true)
+                AND tc.access_status = 'accepted'
+                AND tc.access_timing = 'immediate'
+                AND tc.access_level = 'full_edit'
+              )
+            )
           )
         )
         OR
@@ -409,7 +694,36 @@ export const files = pgTable(
             SELECT 1 FROM wishes w
             JOIN plans p ON p.id = w.plan_id
             WHERE w.id = ${table.wishId}
-            AND p.user_id = current_setting('app.user_id', true)
+            AND (
+              p.user_id = current_setting('app.user_id', true)
+              OR EXISTS (
+                SELECT 1 FROM trusted_contacts tc
+                WHERE tc.plan_id = w.plan_id
+                AND tc.clerk_user_id = current_setting('app.user_id', true)
+                AND tc.access_status = 'accepted'
+                AND tc.access_timing = 'immediate'
+                AND tc.access_level = 'full_edit'
+              )
+            )
+          )
+        )
+        OR
+        (
+          ${table.messageId} IS NOT NULL AND EXISTS (
+            SELECT 1 FROM messages m
+            JOIN plans p ON p.id = m.plan_id
+            WHERE m.id = ${table.messageId}
+            AND (
+              p.user_id = current_setting('app.user_id', true)
+              OR EXISTS (
+                SELECT 1 FROM trusted_contacts tc
+                WHERE tc.plan_id = m.plan_id
+                AND tc.clerk_user_id = current_setting('app.user_id', true)
+                AND tc.access_status = 'accepted'
+                AND tc.access_timing = 'immediate'
+                AND tc.access_level = 'full_edit'
+              )
+            )
           )
         )
       `,
@@ -435,6 +749,15 @@ export type NewEntry = typeof entries.$inferInsert;
 
 export type Wish = typeof wishes.$inferSelect;
 export type NewWish = typeof wishes.$inferInsert;
+
+export type Message = typeof messages.$inferSelect;
+export type NewMessage = typeof messages.$inferInsert;
+
+export type TrustedContact = typeof trustedContacts.$inferSelect;
+export type NewTrustedContact = typeof trustedContacts.$inferInsert;
+
+export type PlanActivityLog = typeof planActivityLog.$inferSelect;
+export type NewPlanActivityLog = typeof planActivityLog.$inferInsert;
 
 export type Progress = typeof progress.$inferSelect;
 export type NewProgress = typeof progress.$inferInsert;
