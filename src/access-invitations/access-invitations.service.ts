@@ -92,7 +92,7 @@ export class AccessInvitationsService {
   async acceptInvitation(
     token: string,
     currentUserId: string,
-  ): Promise<TrustedContact> {
+  ): Promise<Omit<TrustedContact, 'notes'>> {
     // Verify token
     const payload = this.invitationTokenService.verifyToken(token);
 
@@ -164,11 +164,17 @@ export class AccessInvitationsService {
             acceptedAt: new Date(),
           });
         } catch (error) {
-          this.logger.error('Failed to send owner acceptance notification', error);
+          this.logger.error(
+            'Failed to send owner acceptance notification',
+            error,
+          );
         }
       }
 
-      return updated;
+      // Exclude owner's private notes from response to trusted contact
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { notes: _notes, ...withoutNotes } = updated;
+      return withoutNotes;
     });
   }
 

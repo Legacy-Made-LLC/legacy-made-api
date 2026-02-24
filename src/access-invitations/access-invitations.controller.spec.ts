@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AccessInvitationsController } from './access-invitations.controller';
 import { AccessInvitationsService } from './access-invitations.service';
 
@@ -14,6 +15,12 @@ describe('AccessInvitationsController', () => {
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
+      imports: [
+        ThrottlerModule.forRoot([
+          { name: 'short', ttl: 1000, limit: 3 },
+          { name: 'medium', ttl: 60000, limit: 20 },
+        ]),
+      ],
       controllers: [AccessInvitationsController],
       providers: [
         {
