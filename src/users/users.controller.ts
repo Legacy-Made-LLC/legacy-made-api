@@ -63,11 +63,13 @@ export class UsersController {
   }
 
   private async handleUserUpdated(data: UserJSON) {
-    await this.usersService.updateUser(data.id, {
+    await this.usersService.upsertUser({
+      id: data.id,
       email: this.extractPrimaryEmail(data),
       firstName: data.first_name,
       lastName: data.last_name,
       avatarUrl: data.image_url,
+      createdAt: new Date(data.created_at),
       updatedAt: new Date(data.updated_at),
     });
   }
