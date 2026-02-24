@@ -46,6 +46,10 @@ describe('TrustedContactsService', () => {
           provide: ActivityLogService,
           useValue: { log: jest.fn() },
         },
+        {
+          provide: ApiConfigService,
+          useValue: { get: jest.fn(() => 'https://app.test.com') },
+        },
       ],
     }).compile();
 

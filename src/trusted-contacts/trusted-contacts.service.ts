@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { eq, and } from 'drizzle-orm';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { ApiConfigService } from '../config/api-config.service';
 import { DbService } from '../db/db.service';
 import { EmailService } from '../email/email.service';
 import { trustedContacts, users, plans, type TrustedContact } from '../schema';
@@ -17,12 +18,17 @@ import { InvitationTokenService } from './invitation-token.service';
 export class TrustedContactsService {
   private readonly logger = new Logger(TrustedContactsService.name);
 
+  private readonly invitationBaseUrl: string;
+
   constructor(
     private readonly db: DbService,
     private readonly emailService: EmailService,
     private readonly invitationTokenService: InvitationTokenService,
     private readonly activityLog: ActivityLogService,
-  ) {}
+    private readonly config: ApiConfigService,
+  ) {
+    this.invitationBaseUrl = this.config.get('INVITATION_BASE_URL');
+  }
 
   /**
    * Create a new trusted contact and send invitation email
@@ -65,8 +71,7 @@ export class TrustedContactsService {
         email: trustedContact.email,
       });
 
-      // TODO: Replace with actual frontend URL from config
-      const invitationUrl = `https://app.legacymade.com/invitations/${invitationToken}`;
+      const invitationUrl = `${this.invitationBaseUrl}/invitations/${invitationToken}`;
 
       // Send invitation email
       try {
