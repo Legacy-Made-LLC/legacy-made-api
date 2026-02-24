@@ -33,7 +33,7 @@ export const AccessAcceptedEmail = ({
         plan.
       </Text>
       <Text style={paragraph}>
-        <strong>Access level:</strong> {accessLevel.replace('_', ' ')}
+        <strong>Access level:</strong> {accessLevel.replace(/_/g, ' ')}
       </Text>
       <Text style={paragraph}>
         {contactName} {accessDescription}.
