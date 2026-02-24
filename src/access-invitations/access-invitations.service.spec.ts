@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ActivityLogService } from '../activity-log/activity-log.service';
 import { DbService } from '../db/db.service';
 import { EmailService } from '../email/email.service';
 import { InvitationTokenService } from '../trusted-contacts/invitation-token.service';
@@ -39,6 +40,10 @@ describe('AccessInvitationsService', () => {
         {
           provide: InvitationTokenService,
           useValue: mockInvitationTokenService,
+        },
+        {
+          provide: ActivityLogService,
+          useValue: { log: jest.fn() },
         },
       ],
     }).compile();

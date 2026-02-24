@@ -5,6 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { eq, and } from 'drizzle-orm';
+import { ActivityLogService } from '../activity-log/activity-log.service';
 import { DbService } from '../db/db.service';
 import { EmailService } from '../email/email.service';
 import { trustedContacts, users, plans, type TrustedContact } from '../schema';
@@ -20,6 +21,7 @@ export class TrustedContactsService {
     private readonly db: DbService,
     private readonly emailService: EmailService,
     private readonly invitationTokenService: InvitationTokenService,
+    private readonly activityLog: ActivityLogService,
   ) {}
 
   /**
@@ -94,6 +96,13 @@ export class TrustedContactsService {
         // We don't throw here - the contact was created, email can be resent
       }
 
+      await this.activityLog.log(tx, {
+        planId,
+        action: 'created',
+        resourceType: 'trusted_contact',
+        resourceId: trustedContact.id,
+      });
+
       return trustedContact;
     });
   }
@@ -153,6 +162,13 @@ export class TrustedContactsService {
         throw new NotFoundException('Trusted contact not found');
       }
 
+      await this.activityLog.log(tx, {
+        planId,
+        action: 'updated',
+        resourceType: 'trusted_contact',
+        resourceId: id,
+      });
+
       this.logger.log(`Updated trusted contact ${id} for plan ${planId}`);
       return updated;
     });
@@ -173,6 +189,13 @@ export class TrustedContactsService {
       if (!result.length) {
         throw new NotFoundException('Trusted contact not found');
       }
+
+      await this.activityLog.log(tx, {
+        planId,
+        action: 'deleted',
+        resourceType: 'trusted_contact',
+        resourceId: id,
+      });
 
       this.logger.log(`Removed trusted contact ${id} from plan ${planId}`);
     });

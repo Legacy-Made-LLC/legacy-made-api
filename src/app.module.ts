@@ -21,6 +21,7 @@ import { TrustedContactsModule } from './trusted-contacts/trusted-contacts.modul
 import { AccessInvitationsModule } from './access-invitations/access-invitations.module';
 import { PlanAccessModule } from './plan-access/plan-access.module';
 import { SharedPlansModule } from './shared-plans/shared-plans.module';
+import { ActivityLogModule } from './activity-log/activity-log.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { SharedPlansModule } from './shared-plans/shared-plans.module';
     TrustedContactsModule,
     AccessInvitationsModule,
     SharedPlansModule,
+    ActivityLogModule,
   ],
   providers: [
     {

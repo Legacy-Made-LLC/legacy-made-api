@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ClsService } from 'nestjs-cls';
+import { ActivityLogService } from '../activity-log/activity-log.service';
 import { WishesService } from './wishes.service';
 import { DbService } from '../db/db.service';
 import { EntitlementsService } from '../entitlements';
@@ -56,6 +57,10 @@ describe('WishesService', () => {
         {
           provide: ClsService,
           useValue: { get: jest.fn() },
+        },
+        {
+          provide: ActivityLogService,
+          useValue: { log: jest.fn() },
         },
       ],
     }).compile();

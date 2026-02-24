@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { ClsService } from 'nestjs-cls';
+import { ActivityLogService } from '../activity-log/activity-log.service';
 import { MetadataSchema } from '../common/dto/metadata-schema';
 import { groupBy } from '../common/utils/array';
 import { DbService, DrizzleTransaction } from '../db/db.service';
@@ -32,6 +33,7 @@ export class EntriesService {
     private readonly entitlementsService: EntitlementsService,
     private readonly filesService: FilesService,
     private readonly cls: ClsService<ApiClsStore>,
+    private readonly activityLog: ActivityLogService,
   ) {}
 
   /**
@@ -44,6 +46,12 @@ export class EntriesService {
         .insert(entries)
         .values({ ...createEntryDto, planId, modifiedBy: this.cls.get('userId') })
         .returning();
+      await this.activityLog.log(tx, {
+        planId,
+        action: 'created',
+        resourceType: 'entry',
+        resourceId: entry.id,
+      });
       return entry;
     });
   }
@@ -156,6 +164,13 @@ export class EntriesService {
         .where(eq(entries.id, id))
         .returning();
 
+      await this.activityLog.log(tx, {
+        planId: existing.planId,
+        action: 'updated',
+        resourceType: 'entry',
+        resourceId: id,
+      });
+
       return updated;
     });
   }
@@ -166,8 +181,14 @@ export class EntriesService {
    */
   async remove(id: string) {
     return this.db.rls(async (tx) => {
-      await this.findOneInTx(tx, id);
+      const existing = await this.findOneInTx(tx, id);
       await tx.delete(entries).where(eq(entries.id, id));
+      await this.activityLog.log(tx, {
+        planId: existing.planId,
+        action: 'deleted',
+        resourceType: 'entry',
+        resourceId: id,
+      });
       return { deleted: true };
     });
   }

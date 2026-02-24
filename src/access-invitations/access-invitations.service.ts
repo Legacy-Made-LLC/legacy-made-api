@@ -6,6 +6,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { eq, and } from 'drizzle-orm';
+import { ActivityLogService } from '../activity-log/activity-log.service';
 import { DbService } from '../db/db.service';
 import { EmailService } from '../email/email.service';
 import { trustedContacts, users, plans, type TrustedContact } from '../schema';
@@ -31,6 +32,7 @@ export class AccessInvitationsService {
     private readonly db: DbService,
     private readonly emailService: EmailService,
     private readonly invitationTokenService: InvitationTokenService,
+    private readonly activityLog: ActivityLogService,
   ) {}
 
   /**
@@ -128,6 +130,14 @@ export class AccessInvitationsService {
         .where(eq(trustedContacts.id, payload.trustedContactId))
         .returning();
 
+      await this.activityLog.log(tx, {
+        planId: trustedContact.planId,
+        action: 'updated',
+        resourceType: 'trusted_contact',
+        resourceId: trustedContact.id,
+        details: { statusChange: 'accepted' },
+      });
+
       this.logger.log(
         `Invitation accepted for trusted contact ${payload.trustedContactId}`,
       );
@@ -193,6 +203,14 @@ export class AccessInvitationsService {
         })
         .where(eq(trustedContacts.id, payload.trustedContactId));
 
+      await this.activityLog.log(tx, {
+        planId: trustedContact.planId,
+        action: 'updated',
+        resourceType: 'trusted_contact',
+        resourceId: trustedContact.id,
+        details: { statusChange: 'declined' },
+      });
+
       this.logger.log(
         `Invitation declined for trusted contact ${payload.trustedContactId}`,
       );
@@ -255,6 +273,14 @@ export class AccessInvitationsService {
           revokedAt: new Date(),
         })
         .where(eq(trustedContacts.id, trustedContact.id));
+
+      await this.activityLog.log(tx, {
+        planId,
+        action: 'updated',
+        resourceType: 'trusted_contact',
+        resourceId: trustedContact.id,
+        details: { statusChange: 'revoked_by_contact' },
+      });
 
       this.logger.log(
         `User ${currentUserId} revoked their own access to plan ${planId}`,

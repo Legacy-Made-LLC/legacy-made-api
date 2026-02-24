@@ -2,7 +2,7 @@
 
 **Date:** February 16-24, 2026
 **Feature:** Trusted Contacts / Family Access Pillar
-**Status:** ✅ Complete and Production-Ready
+**Status:** ✅ Core feature complete — shared plans viewing, email notifications, and access control all implemented
 
 ## Overview
 
@@ -415,18 +415,46 @@ nest build
 
 ---
 
+## Completed Implementation Tasks
+
+### 1. Shared Plans Viewing — ✅ Complete
+
+**Implemented in:** `feat/family-access` branch (PR #6)
+
+- `SharedPlansModule` with discovery endpoints (`GET /shared-plans`, `GET /shared-plans/:planId`)
+- `PlanAccessModule` (global) with `PlanAccessGuard` and `PlanAccessService`
+- `RequiresAccessLevel` decorator for write endpoint protection
+- RLS policies updated on entries, wishes, messages, and files for trusted contact access
+- `userHasAccessToPlan()` and `ownerOrTrustedContactPolicy()` RLS helpers
+- `trusted_contacts_self_read` policy to support RLS subqueries
+- `EntitlementsGuard` bypass for trusted contacts
+- `modifiedBy` audit trail wiring on entries and wishes services
+
+### 2. Owner Email Notifications — ✅ Complete
+
+**Implemented in:** `feat/family-access` branch (PR #6)
+
+- Nullable `email` column added to `users` table
+- Primary email extracted from Clerk webhook payload (`user.created` and `user.updated`)
+- Owner notification emails wired up in `AccessInvitationsService`:
+  - `sendAccessAccepted()` on invitation acceptance
+  - `sendAccessDeclined()` on invitation decline
+  - `sendAccessRevokedByContact()` on self-revoke
+- All notifications guarded with `if (owner?.email)` — skipped gracefully when email unavailable
+
+---
+
 ## Future Implementation Tasks
 
-### 1. Shared Plans Viewing (High Priority)
+### 1. Activity Logging Integration (Medium Priority)
 
-**Status:** Architecture complete, implementation pending
+**Status:** Table created, automatic logging not implemented
 
 **Requirements:**
-- New module: `src/shared-plans/`
-- Endpoint: `GET /shared-plans` - List all plans the current user has access to
-- Endpoint: `GET /shared-plans/:planId` - View specific shared plan (filtered by access level)
-- RLS helper function: `userHasAccessToPlan(plan_id, access_levels[])`
-- Update RLS policies on `entries`, `wishes`, `messages` to check trusted contact access
+- Middleware or decorator to automatically log CRUD operations
+- Track `actor_user_id` (from Clerk auth) and `actor_type` (owner vs trusted_contact)
+- Store `details` JSONB with old/new values for sensitive operations
+- UI for plan owners to view activity log
 
 ### 2. "Upon Passing" Manual Upgrade Flow (Medium Priority)
 
@@ -438,27 +466,15 @@ nest build
 - Manual update of `access_level` from `view_only` to intended level
 - Notification email to trusted contact: "Your access to [Name]'s plan is now active"
 
-### 3. Activity Logging Integration (Medium Priority)
+### 3. Messages Module CRUD (Low Priority)
 
-**Status:** Table created, automatic logging not implemented
+**Status:** Table and RLS policies exist, no controller/service/DTOs yet
 
 **Requirements:**
-- Middleware or decorator to automatically log CRUD operations
-- Track `actor_user_id` (from Clerk auth) and `actor_type` (owner vs trusted_contact)
-- Store `details` JSONB with old/new values for sensitive operations
-- UI for plan owners to view activity log
+- `MessagesModule` with controller, service, DTOs following entries/wishes pattern
+- Required for `limited_view` access level to be meaningful (limited_view contacts can only see messages)
 
-### 4. Owner Email Notifications (Low Priority - Blocked)
-
-**Status:** Architecture ready, blocked by missing owner email
-
-**Issue:** The `users` table stores Clerk user IDs but not email addresses. Notification emails to plan owners require either:
-- **Option A:** Store email in `users` table (add during Clerk webhook sync)
-- **Option B:** Fetch email from Clerk API when needed (adds latency)
-
-**Current Status:** Email service has `TODO` comments where owner notifications should be sent
-
-### 5. Enhanced Access Controls (Future Consideration)
+### 4. Enhanced Access Controls (Future Consideration)
 
 **Potential Features:**
 - Granular permissions (e.g., "can edit entries but not wishes")
@@ -497,28 +513,22 @@ nest build
 
 ## Known Issues & Limitations
 
-### 1. Owner Notifications Not Implemented
-**Issue:** Plan owners are not notified when trusted contacts accept/decline/revoke access
-**Cause:** Owner email addresses not stored in database
-**Workaround:** Add email to `users` table during Clerk webhook sync
-**Priority:** Medium (nice-to-have, not critical for v1)
-
-### 2. Shared Plans Viewing Not Implemented
-**Issue:** Trusted contacts cannot yet view the plans they've been granted access to
-**Status:** Next major feature to implement
-**Priority:** High (required for feature to be fully functional)
-
-### 3. "Upon Passing" Flow Manual Only
+### 1. "Upon Passing" Flow Manual Only
 **Issue:** No automated verification; requires staff intervention
 **Status:** As designed for v1
 **Priority:** Medium (can iterate later)
 
-### 4. No Activity Log Enforcement
+### 2. No Activity Log Enforcement
 **Issue:** `plan_activity_log` table exists but nothing writes to it automatically
-**Status:** Manual logging can be added incrementally
-**Priority:** Low (audit trail is optional for v1)
+**Status:** Next feature to implement
+**Priority:** Medium
 
-### 5. Trusted Contact Management Owner-Only
+### 3. Messages Module Not Yet Implemented
+**Issue:** Messages table and RLS exist but no CRUD endpoints
+**Impact:** `limited_view` trusted contacts have no content to view until this is built
+**Priority:** Low
+
+### 4. Trusted Contact Management Owner-Only
 **Design Decision:** Editors cannot manage other trusted contacts (by design for security)
 **Feedback:** Could add "Admin" access level in future if needed
 
@@ -562,6 +572,6 @@ nest build
 
 ---
 
-**Document Version:** 1.0
+**Document Version:** 1.1
 **Last Updated:** February 24, 2026
 **Author:** Claude (AI Assistant) with Jared Gibson
