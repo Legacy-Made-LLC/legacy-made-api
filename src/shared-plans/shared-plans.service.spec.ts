@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ClsService } from 'nestjs-cls';
 import { DbService } from '../db/db.service';
+import { ApiClsService } from '../lib/api-cls.service';
 import { SharedPlansService } from './shared-plans.service';
 
 describe('SharedPlansService', () => {
@@ -13,6 +13,7 @@ describe('SharedPlansService', () => {
 
   const mockClsService = {
     get: jest.fn(),
+    requireUserId: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -24,7 +25,7 @@ describe('SharedPlansService', () => {
           useValue: mockDbService,
         },
         {
-          provide: ClsService,
+          provide: ApiClsService,
           useValue: mockClsService,
         },
       ],

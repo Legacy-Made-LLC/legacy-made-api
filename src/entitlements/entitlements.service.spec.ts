@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ClsService } from 'nestjs-cls';
 import { DbService } from '../db/db.service';
+import { ApiClsService } from '../lib/api-cls.service';
 import {
   SUBSCRIPTION_GRACE_PERIOD_MS,
   TIER_CONFIG,
@@ -54,7 +54,7 @@ describe('EntitlementsService', () => {
           useValue: mockDbService,
         },
         {
-          provide: ClsService,
+          provide: ApiClsService,
           useValue: mockClsService,
         },
       ],

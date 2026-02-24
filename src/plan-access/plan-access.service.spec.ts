@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ClsService } from 'nestjs-cls';
 import { DbService } from '../db/db.service';
+import { ApiClsService } from '../lib/api-cls.service';
 import { PlanAccessService } from './plan-access.service';
 
 describe('PlanAccessService', () => {
@@ -24,7 +24,7 @@ describe('PlanAccessService', () => {
           useValue: mockDbService,
         },
         {
-          provide: ClsService,
+          provide: ApiClsService,
           useValue: mockClsService,
         },
       ],

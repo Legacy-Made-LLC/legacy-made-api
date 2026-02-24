@@ -6,8 +6,8 @@ import {
   SetMetadata,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ClsService } from 'nestjs-cls';
-import { AccessLevel, ApiClsStore } from '../lib/types/cls';
+import { ApiClsService } from '../lib/api-cls.service';
+import { AccessLevel } from '../lib/types/cls';
 import { PlanAccessService } from './plan-access.service';
 
 export const REQUIRED_ACCESS_LEVEL = 'required_access_level';
@@ -47,7 +47,7 @@ export class PlanAccessGuard implements CanActivate {
   constructor(
     private readonly planAccessService: PlanAccessService,
     private readonly reflector: Reflector,
-    private readonly cls: ClsService<ApiClsStore>,
+    private readonly cls: ApiClsService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {

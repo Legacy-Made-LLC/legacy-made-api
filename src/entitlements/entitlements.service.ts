@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { count, eq, sum } from 'drizzle-orm';
-import { ClsService } from 'nestjs-cls';
 import { DbService, DrizzleTransaction } from '../db/db.service';
-import { ApiClsStore } from '../lib/types/cls';
+import { ApiClsService } from '../lib/api-cls.service';
 import { entries, files, plans, subscriptions, wishes } from '../schema';
 import {
   NON_EXPIRING_TIERS,
@@ -25,7 +24,7 @@ import {
 export class EntitlementsService {
   constructor(
     private readonly db: DbService,
-    private readonly cls: ClsService<ApiClsStore>,
+    private readonly cls: ApiClsService,
   ) {}
 
   /**

@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
-import { ClsService } from 'nestjs-cls';
 import { DbService } from '../db/db.service';
-import { AccessLevel, ApiClsStore, PlanAccessRole } from '../lib/types/cls';
+import { ApiClsService } from '../lib/api-cls.service';
+import { AccessLevel, PlanAccessRole } from '../lib/types/cls';
 import { plans, trustedContacts } from '../schema';
 
 export interface PlanAccessContext {
@@ -14,7 +14,7 @@ export interface PlanAccessContext {
 export class PlanAccessService {
   constructor(
     private readonly db: DbService,
-    private readonly cls: ClsService<ApiClsStore>,
+    private readonly cls: ApiClsService,
   ) {}
 
   /**

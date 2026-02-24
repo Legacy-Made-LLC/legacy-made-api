@@ -5,8 +5,7 @@ import {
   SetMetadata,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ClsService } from 'nestjs-cls';
-import { ApiClsStore } from '../lib/types/cls';
+import { ApiClsService } from '../lib/api-cls.service';
 import { EntitlementsService } from './entitlements.service';
 import { EntitlementException } from './entitlements.exception';
 import { Pillar, QuotaFeature } from './entitlements.types';
@@ -66,7 +65,7 @@ export class EntitlementsGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly entitlementsService: EntitlementsService,
-    private readonly cls: ClsService<ApiClsStore>,
+    private readonly cls: ApiClsService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {

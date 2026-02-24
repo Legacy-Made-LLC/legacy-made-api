@@ -1,7 +1,7 @@
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Test, TestingModule } from '@nestjs/testing';
-import { ClsService } from 'nestjs-cls';
+import { ApiClsService } from '../lib/api-cls.service';
 import { PlanAccessGuard, REQUIRED_ACCESS_LEVEL } from './plan-access.guard';
 import { PlanAccessService } from './plan-access.service';
 
@@ -50,7 +50,7 @@ describe('PlanAccessGuard', () => {
           useValue: mockReflector,
         },
         {
-          provide: ClsService,
+          provide: ApiClsService,
           useValue: mockClsService,
         },
       ],

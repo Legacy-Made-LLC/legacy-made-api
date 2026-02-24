@@ -1,13 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
-import { ClsService } from 'nestjs-cls';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { MetadataSchema } from '../common/dto/metadata-schema';
 import { groupBy } from '../common/utils/array';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { EntitlementsService } from '../entitlements';
 import { FilesService } from '../files/files.service';
-import { ApiClsStore } from '../lib/types/cls';
+import { ApiClsService } from '../lib/api-cls.service';
 import { wishes, Wish } from '../schema';
 import {
   CreateWishDto,
@@ -32,7 +31,7 @@ export class WishesService {
     private readonly db: DbService,
     private readonly entitlementsService: EntitlementsService,
     private readonly filesService: FilesService,
-    private readonly cls: ClsService<ApiClsStore>,
+    private readonly cls: ApiClsService,
     private readonly activityLog: ActivityLogService,
   ) {}
 
@@ -44,7 +43,11 @@ export class WishesService {
     return this.db.rls(async (tx) => {
       const [wish] = await tx
         .insert(wishes)
-        .values({ ...createWishDto, planId, modifiedBy: this.cls.get('userId') })
+        .values({
+          ...createWishDto,
+          planId,
+          modifiedBy: this.cls.get('userId'),
+        })
         .returning();
       await this.activityLog.log(tx, {
         planId,

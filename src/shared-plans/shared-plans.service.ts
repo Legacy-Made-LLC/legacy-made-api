@@ -1,15 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
-import { ClsService } from 'nestjs-cls';
 import { DbService } from '../db/db.service';
-import { ApiClsStore } from '../lib/types/cls';
+import { ApiClsService } from '../lib/api-cls.service';
 import { plans, trustedContacts, users } from '../schema';
 
 @Injectable()
 export class SharedPlansService {
   constructor(
     private readonly db: DbService,
-    private readonly cls: ClsService<ApiClsStore>,
+    private readonly cls: ApiClsService,
   ) {}
 
   /**
@@ -22,7 +21,7 @@ export class SharedPlansService {
    * Security: Explicitly filters by the authenticated user's clerk_user_id.
    */
   async findAll() {
-    const userId = this.cls.get('userId');
+    const userId = this.cls.requireUserId();
 
     return this.db.bypassRls(async (tx) => {
       return tx
@@ -43,7 +42,7 @@ export class SharedPlansService {
         .innerJoin(users, eq(users.id, plans.userId))
         .where(
           and(
-            eq(trustedContacts.clerkUserId, userId!),
+            eq(trustedContacts.clerkUserId, userId),
             eq(trustedContacts.accessStatus, 'accepted'),
             eq(trustedContacts.accessTiming, 'immediate'),
           ),
@@ -56,7 +55,7 @@ export class SharedPlansService {
    * Get details of a specific shared plan including the user's access level.
    */
   async findOne(planId: string) {
-    const userId = this.cls.get('userId');
+    const userId = this.cls.requireUserId();
 
     const result = await this.db.bypassRls(async (tx) => {
       const [row] = await tx
@@ -79,7 +78,7 @@ export class SharedPlansService {
         .where(
           and(
             eq(trustedContacts.planId, planId),
-            eq(trustedContacts.clerkUserId, userId!),
+            eq(trustedContacts.clerkUserId, userId),
             eq(trustedContacts.accessStatus, 'accepted'),
             eq(trustedContacts.accessTiming, 'immediate'),
           ),

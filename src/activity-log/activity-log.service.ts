@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { ClsService } from 'nestjs-cls';
 import { DrizzleTransaction } from '../db/db.service';
-import { ApiClsStore } from '../lib/types/cls';
+import { ApiClsService } from '../lib/api-cls.service';
 import { planActivityLog } from '../schema';
 
 export interface LogActivityParams {
@@ -14,7 +13,7 @@ export interface LogActivityParams {
 
 @Injectable()
 export class ActivityLogService {
-  constructor(private readonly cls: ClsService<ApiClsStore>) {}
+  constructor(private readonly cls: ApiClsService) {}
 
   /**
    * Log an activity within an existing transaction.

@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ClsModule } from 'nestjs-cls';
 import { ApiConfigService } from 'src/config/api-config.service';
+import { ApiClsService } from 'src/lib/api-cls.service';
 import { CLERK_CLIENT, createClerkClientFactory } from 'src/lib/clerk/client';
 import { AuthController } from './auth.controller';
 import { AuthGuard } from './auth.guard';
@@ -18,6 +19,7 @@ import { AuthService } from './auth.service';
   ],
   providers: [
     AuthService,
+    ApiClsService,
     {
       provide: CLERK_CLIENT,
       useFactory: (config: ApiConfigService) =>
@@ -30,6 +32,6 @@ import { AuthService } from './auth.service';
     },
   ],
   controllers: [AuthController],
-  exports: [ClsModule],
+  exports: [ClsModule, ApiClsService],
 })
 export class AuthModule {}

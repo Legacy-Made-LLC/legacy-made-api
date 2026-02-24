@@ -2,9 +2,8 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import { ClsService } from 'nestjs-cls';
 import { ApiConfigService } from 'src/config/api-config.service';
-import { ApiClsStore } from 'src/lib/types/cls';
+import { ApiClsService } from 'src/lib/api-cls.service';
 
 export type DrizzleInstance = ReturnType<typeof drizzle>;
 export type DrizzleTransaction = Parameters<
@@ -17,7 +16,7 @@ export class DbService implements OnModuleInit {
 
   constructor(
     private readonly config: ApiConfigService,
-    private readonly cls: ClsService<ApiClsStore>,
+    private readonly cls: ApiClsService,
   ) {
     const dbUrl = this.config.get('DATABASE_URL_APP');
     this.drizzle = drizzle(dbUrl);

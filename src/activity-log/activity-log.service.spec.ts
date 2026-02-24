@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ClsService } from 'nestjs-cls';
+import { ApiClsService } from '../lib/api-cls.service';
 import { ActivityLogService } from './activity-log.service';
 
 describe('ActivityLogService', () => {
@@ -13,7 +13,7 @@ describe('ActivityLogService', () => {
       providers: [
         ActivityLogService,
         {
-          provide: ClsService,
+          provide: ApiClsService,
           useValue: mockCls,
         },
       ],

@@ -1,7 +1,7 @@
 import { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Test, TestingModule } from '@nestjs/testing';
-import { ClsService } from 'nestjs-cls';
+import { ApiClsService } from '../lib/api-cls.service';
 import { EntitlementException } from './entitlements.exception';
 import {
   EntitlementsGuard,
@@ -56,7 +56,7 @@ describe('EntitlementsGuard', () => {
           useValue: mockEntitlementsService,
         },
         {
-          provide: ClsService,
+          provide: ApiClsService,
           useValue: mockClsService,
         },
       ],
