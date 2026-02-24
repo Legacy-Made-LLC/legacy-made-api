@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ClsService } from 'nestjs-cls';
 import { EntriesService } from './entries.service';
 import { DbService } from '../db/db.service';
 import { EntitlementsService } from '../entitlements';
@@ -51,6 +52,10 @@ describe('EntriesService', () => {
         {
           provide: FilesService,
           useValue: mockFilesService,
+        },
+        {
+          provide: ClsService,
+          useValue: { get: jest.fn() },
         },
       ],
     }).compile();

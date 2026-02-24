@@ -5,6 +5,8 @@ import {
   SetMetadata,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { ClsService } from 'nestjs-cls';
+import { ApiClsStore } from '../lib/types/cls';
 import { EntitlementsService } from './entitlements.service';
 import { EntitlementException } from './entitlements.exception';
 import { Pillar, QuotaFeature } from './entitlements.types';
@@ -64,9 +66,17 @@ export class EntitlementsGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly entitlementsService: EntitlementsService,
+    private readonly cls: ClsService<ApiClsStore>,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    // Trusted contacts bypass entitlements — the plan owner's subscription covers the plan.
+    // Access level enforcement is handled by PlanAccessGuard and RLS policies.
+    const planAccessRole = this.cls.get('planAccessRole');
+    if (planAccessRole === 'trusted_contact') {
+      return true;
+    }
+
     const requiredPillar = this.reflector.getAllAndOverride<Pillar | undefined>(
       REQUIRED_PILLAR,
       [context.getHandler(), context.getClass()],

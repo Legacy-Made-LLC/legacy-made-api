@@ -1,6 +1,7 @@
 import { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Test, TestingModule } from '@nestjs/testing';
+import { ClsService } from 'nestjs-cls';
 import { EntitlementException } from './entitlements.exception';
 import {
   EntitlementsGuard,
@@ -20,6 +21,7 @@ describe('EntitlementsGuard', () => {
       'canAccessPillar' | 'canViewPillar' | 'canUseQuota'
     >
   >;
+  let mockClsService: { get: jest.Mock };
 
   const createMockExecutionContext = (): ExecutionContext =>
     ({
@@ -38,6 +40,10 @@ describe('EntitlementsGuard', () => {
       canUseQuota: jest.fn(),
     };
 
+    mockClsService = {
+      get: jest.fn().mockReturnValue(undefined), // Default: not a trusted contact
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EntitlementsGuard,
@@ -48,6 +54,10 @@ describe('EntitlementsGuard', () => {
         {
           provide: EntitlementsService,
           useValue: mockEntitlementsService,
+        },
+        {
+          provide: ClsService,
+          useValue: mockClsService,
         },
       ],
     }).compile();
@@ -662,6 +672,25 @@ describe('EntitlementsGuard', () => {
         await expect(guard.canActivate(context)).rejects.toThrow(
           EntitlementException,
         );
+      });
+    });
+
+    describe('trusted contact bypass', () => {
+      it('should skip all entitlements checks for trusted contacts', async () => {
+        mockClsService.get.mockReturnValue('trusted_contact');
+
+        mockReflector.getAllAndOverride.mockImplementation((key) => {
+          if (key === REQUIRED_PILLAR) return 'important_info';
+          if (key === REQUIRED_QUOTA) return 'entries';
+          return undefined;
+        });
+
+        const context = createMockExecutionContext();
+        const result = await guard.canActivate(context);
+
+        expect(result).toBe(true);
+        expect(mockEntitlementsService.canAccessPillar).not.toHaveBeenCalled();
+        expect(mockEntitlementsService.canUseQuota).not.toHaveBeenCalled();
       });
     });
 

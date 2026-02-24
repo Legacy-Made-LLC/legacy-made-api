@@ -1,10 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
+import { ClsService } from 'nestjs-cls';
 import { MetadataSchema } from '../common/dto/metadata-schema';
 import { groupBy } from '../common/utils/array';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { EntitlementsService } from '../entitlements';
 import { FilesService } from '../files/files.service';
+import { ApiClsStore } from '../lib/types/cls';
 import { entries, Entry } from '../schema';
 import {
   CreateEntryDto,
@@ -29,6 +31,7 @@ export class EntriesService {
     private readonly db: DbService,
     private readonly entitlementsService: EntitlementsService,
     private readonly filesService: FilesService,
+    private readonly cls: ClsService<ApiClsStore>,
   ) {}
 
   /**
@@ -39,7 +42,7 @@ export class EntriesService {
     return this.db.rls(async (tx) => {
       const [entry] = await tx
         .insert(entries)
-        .values({ ...createEntryDto, planId })
+        .values({ ...createEntryDto, planId, modifiedBy: this.cls.get('userId') })
         .returning();
       return entry;
     });
@@ -148,6 +151,7 @@ export class EntriesService {
         .set({
           ...updateEntryDto,
           metadata: updatedMetadata,
+          modifiedBy: this.cls.get('userId'),
         })
         .where(eq(entries.id, id))
         .returning();
