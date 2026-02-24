@@ -104,9 +104,9 @@ describe('ProgressService', () => {
     it('should throw NotFoundException when key does not exist', async () => {
       selectWhere.mockResolvedValue([]);
 
-      await expect(
-        service.findOne('plan-1', 'nonexistent'),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.findOne('plan-1', 'nonexistent')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -123,9 +123,9 @@ describe('ProgressService', () => {
     it('should throw NotFoundException when key does not exist', async () => {
       deleteReturning.mockResolvedValue([]);
 
-      await expect(
-        service.remove('plan-1', 'nonexistent'),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.remove('plan-1', 'nonexistent')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });
