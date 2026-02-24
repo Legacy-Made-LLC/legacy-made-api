@@ -36,7 +36,8 @@ export const configSchema = z.object({
 
   // RESEND (Email Service)
   RESEND_API_KEY: z.string(),
-  RESEND_FROM_EMAIL: z.string().email(),
+  RESEND_FROM_EMAIL_INVITE: z.string().email().default('invite@notify.mylegacymade.com'),
+  RESEND_FROM_EMAIL_UPDATES: z.string().email().default('updates@notify.mylegacymade.com'),
   RESEND_FROM_NAME: z.string().default('Legacy Made'),
 
   // INVITATION TOKENS

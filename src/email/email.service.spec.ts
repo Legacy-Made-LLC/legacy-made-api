@@ -9,7 +9,8 @@ describe('EmailService', () => {
     get: jest.fn((key: string) => {
       const config = {
         RESEND_API_KEY: 're_test_key',
-        RESEND_FROM_EMAIL: 'test@example.com',
+        RESEND_FROM_EMAIL_INVITE: 'invite@notify.example.com',
+        RESEND_FROM_EMAIL_UPDATES: 'updates@notify.example.com',
         RESEND_FROM_NAME: 'Test App',
       };
       return config[key];

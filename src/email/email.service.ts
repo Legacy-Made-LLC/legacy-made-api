@@ -44,13 +44,14 @@ export interface SendAccessRevokedEmailData {
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private readonly resend: Resend;
-  private readonly fromEmail: string;
-  private readonly fromName: string;
+  private readonly fromInvite: string;
+  private readonly fromUpdates: string;
 
   constructor(private readonly config: ApiConfigService) {
     this.resend = new Resend(this.config.get('RESEND_API_KEY'));
-    this.fromEmail = this.config.get('RESEND_FROM_EMAIL');
-    this.fromName = this.config.get('RESEND_FROM_NAME');
+    const name = this.config.get('RESEND_FROM_NAME');
+    this.fromInvite = `${name} <${this.config.get('RESEND_FROM_EMAIL_INVITE')}>`;
+    this.fromUpdates = `${name} <${this.config.get('RESEND_FROM_EMAIL_UPDATES')}>`;
   }
 
   /**
@@ -95,7 +96,7 @@ export class EmailService {
       }
 
       await this.resend.emails.send({
-        from: `${this.fromName} <${this.fromEmail}>`,
+        from: this.fromInvite,
         to: data.to,
         subject,
         html: emailHtml,
@@ -123,7 +124,7 @@ export class EmailService {
       );
 
       await this.resend.emails.send({
-        from: `${this.fromName} <${this.fromEmail}>`,
+        from: this.fromUpdates,
         to: data.to,
         subject: `${data.contactName} accepted your invitation to access your Legacy Made plan`,
         html: emailHtml,
@@ -153,7 +154,7 @@ export class EmailService {
       );
 
       await this.resend.emails.send({
-        from: `${this.fromName} <${this.fromEmail}>`,
+        from: this.fromUpdates,
         to: data.to,
         subject: `${data.contactName} declined your invitation to access your Legacy Made plan`,
         html: emailHtml,
@@ -185,7 +186,7 @@ export class EmailService {
       );
 
       await this.resend.emails.send({
-        from: `${this.fromName} <${this.fromEmail}>`,
+        from: this.fromUpdates,
         to: data.to,
         subject: `${data.contactName} has removed their access to your Legacy Made plan`,
         html: emailHtml,
