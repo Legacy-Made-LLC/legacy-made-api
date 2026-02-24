@@ -252,7 +252,7 @@ export class TrustedContactsService {
         email: trustedContact.email,
       });
 
-      const invitationUrl = `https://app.legacymade.com/invitations/${invitationToken}`;
+      const invitationUrl = `${this.invitationBaseUrl}/invitations/${invitationToken}`;
 
       // Send invitation email
       await this.emailService.sendInvitation({

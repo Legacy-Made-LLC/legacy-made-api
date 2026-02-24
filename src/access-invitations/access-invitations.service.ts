@@ -153,15 +153,19 @@ export class AccessInvitationsService {
         .where(eq(plans.id, trustedContact.planId));
 
       if (owner?.email) {
-        const contactName =
-          `${trustedContact.firstName} ${trustedContact.lastName}`.trim();
-        await this.emailService.sendAccessAccepted({
-          to: owner.email,
-          ownerFirstName: owner.firstName ?? 'there',
-          contactName,
-          accessLevel: trustedContact.accessLevel,
-          acceptedAt: new Date(),
-        });
+        try {
+          const contactName =
+            `${trustedContact.firstName} ${trustedContact.lastName}`.trim();
+          await this.emailService.sendAccessAccepted({
+            to: owner.email,
+            ownerFirstName: owner.firstName ?? 'there',
+            contactName,
+            accessLevel: trustedContact.accessLevel,
+            acceptedAt: new Date(),
+          });
+        } catch (error) {
+          this.logger.error('Failed to send owner acceptance notification', error);
+        }
       }
 
       return updated;
@@ -226,14 +230,18 @@ export class AccessInvitationsService {
         .where(eq(plans.id, trustedContact.planId));
 
       if (owner?.email) {
-        const contactName =
-          `${trustedContact.firstName} ${trustedContact.lastName}`.trim();
-        await this.emailService.sendAccessDeclined({
-          to: owner.email,
-          ownerFirstName: owner.firstName ?? 'there',
-          contactName,
-          declinedAt: new Date(),
-        });
+        try {
+          const contactName =
+            `${trustedContact.firstName} ${trustedContact.lastName}`.trim();
+          await this.emailService.sendAccessDeclined({
+            to: owner.email,
+            ownerFirstName: owner.firstName ?? 'there',
+            contactName,
+            declinedAt: new Date(),
+          });
+        } catch (error) {
+          this.logger.error('Failed to send owner decline notification', error);
+        }
       }
     });
   }
@@ -297,14 +305,18 @@ export class AccessInvitationsService {
         .where(eq(plans.id, planId));
 
       if (owner?.email) {
-        const contactName =
-          `${trustedContact.firstName} ${trustedContact.lastName}`.trim();
-        await this.emailService.sendAccessRevokedByContact({
-          to: owner.email,
-          ownerFirstName: owner.firstName ?? 'there',
-          contactName,
-          revokedAt: new Date(),
-        });
+        try {
+          const contactName =
+            `${trustedContact.firstName} ${trustedContact.lastName}`.trim();
+          await this.emailService.sendAccessRevokedByContact({
+            to: owner.email,
+            ownerFirstName: owner.firstName ?? 'there',
+            contactName,
+            revokedAt: new Date(),
+          });
+        } catch (error) {
+          this.logger.error('Failed to send owner revoke notification', error);
+        }
       }
     });
   }

@@ -480,6 +480,7 @@ export const trustedContacts = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
+    uniqueIndex('trusted_contacts_plan_email_uniq').on(table.planId, table.email),
     index('trusted_contacts_plan_id_idx').on(table.planId),
     index('trusted_contacts_clerk_user_id_idx').on(table.clerkUserId),
     index('trusted_contacts_email_idx').on(table.email),
@@ -542,7 +543,17 @@ export const planActivityLog = pgTable(
     ),
     shouldBypassRlsPolicy(),
     // Only plan owners can read activity logs
-    userOwnsPlanPolicy(table.planId),
+    crudPolicy({
+      role: 'public',
+      read: userOwnsPlan(table.planId),
+      modify: false,
+    }),
+    // Both owners and trusted contacts can insert log entries
+    pgPolicy('plan_activity_log_insert', {
+      for: 'insert',
+      to: 'public',
+      withCheck: sql`(${userOwnsPlan(table.planId)}) OR (${userHasAccessToPlan(table.planId, ['full_edit', 'full_view', 'limited_view', 'view_only'])})`,
+    }),
   ],
 ).enableRLS();
 

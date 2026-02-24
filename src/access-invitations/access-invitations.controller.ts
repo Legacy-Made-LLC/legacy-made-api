@@ -8,6 +8,7 @@ import {
   HttpStatus,
   Req,
   ParseUUIDPipe,
+  UnauthorizedException,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { AccessInvitationsService } from './access-invitations.service';
@@ -34,8 +35,10 @@ export class AccessInvitationsController {
    */
   @Post(':token/accept')
   acceptInvitation(@Param('token') token: string, @Req() req: Request) {
-    // TODO: Extract user ID from Clerk auth middleware
-    const currentUserId = (req as any).auth?.userId || 'mock-user-id';
+    const currentUserId = (req as any).auth?.userId;
+    if (!currentUserId) {
+      throw new UnauthorizedException('Authentication required');
+    }
     return this.accessInvitationsService.acceptInvitation(token, currentUserId);
   }
 
@@ -59,7 +62,10 @@ export class AccessInvitationsController {
     @Param('planId', ParseUUIDPipe) planId: string,
     @Req() req: Request,
   ) {
-    const currentUserId = (req as any).auth?.userId || 'mock-user-id';
+    const currentUserId = (req as any).auth?.userId;
+    if (!currentUserId) {
+      throw new UnauthorizedException('Authentication required');
+    }
     return this.accessInvitationsService.revokeOwnAccess(planId, currentUserId);
   }
 }
