@@ -429,7 +429,7 @@ export const progress = pgTable(
  * Trusted Contacts table - manages family access to plans
  *
  * Allows plan owners to grant access to their plan to other users.
- * Supports multiple access levels (full_edit, full_view, limited_view, view_only)
+ * Supports multiple access levels (full_edit, full_view, limited_view)
  * and timing modes (immediate, upon_passing).
  *
  * When a trusted contact accepts, their clerk_user_id is set, enabling
@@ -450,7 +450,7 @@ export const trustedContacts = pgTable(
     relationship: text('relationship'), // Free text (spouse, child, attorney, etc.)
 
     // Access configuration
-    accessLevel: text('access_level').notNull(), // 'full_edit' | 'full_view' | 'limited_view' | 'view_only'
+    accessLevel: text('access_level').notNull(), // 'full_edit' | 'full_view' | 'limited_view'
     accessTiming: text('access_timing').notNull(), // 'immediate' | 'upon_passing'
     accessStatus: text('access_status').notNull().default('pending'), // 'pending' | 'accepted' | 'declined' | 'revoked_by_owner' | 'revoked_by_contact'
 
@@ -480,7 +480,10 @@ export const trustedContacts = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
-    uniqueIndex('trusted_contacts_plan_email_uniq').on(table.planId, table.email),
+    uniqueIndex('trusted_contacts_plan_email_uniq').on(
+      table.planId,
+      table.email,
+    ),
     index('trusted_contacts_plan_id_idx').on(table.planId),
     index('trusted_contacts_clerk_user_id_idx').on(table.clerkUserId),
     index('trusted_contacts_email_idx').on(table.email),
@@ -552,7 +555,7 @@ export const planActivityLog = pgTable(
     pgPolicy('plan_activity_log_insert', {
       for: 'insert',
       to: 'public',
-      withCheck: sql`(${userOwnsPlan(table.planId)}) OR (${userHasAccessToPlan(table.planId, ['full_edit', 'full_view', 'limited_view', 'view_only'])})`,
+      withCheck: sql`(${userOwnsPlan(table.planId)}) OR (${userHasAccessToPlan(table.planId, ['full_edit', 'full_view', 'limited_view'])})`,
     }),
   ],
 ).enableRLS();

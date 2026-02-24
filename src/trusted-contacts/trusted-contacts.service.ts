@@ -82,8 +82,7 @@ export class TrustedContactsService {
           accessLevel: trustedContact.accessLevel as
             | 'full_edit'
             | 'full_view'
-            | 'limited_view'
-            | 'view_only',
+            | 'limited_view',
           accessTiming: trustedContact.accessTiming as
             | 'immediate'
             | 'upon_passing',
@@ -262,8 +261,7 @@ export class TrustedContactsService {
         accessLevel: trustedContact.accessLevel as
           | 'full_edit'
           | 'full_view'
-          | 'limited_view'
-          | 'view_only',
+          | 'limited_view',
         accessTiming: trustedContact.accessTiming as
           | 'immediate'
           | 'upon_passing',

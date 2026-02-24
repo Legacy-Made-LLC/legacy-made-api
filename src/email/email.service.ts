@@ -13,7 +13,7 @@ export interface SendInvitationEmailData {
   to: string;
   contactFirstName: string;
   ownerName: string;
-  accessLevel: 'full_edit' | 'full_view' | 'limited_view' | 'view_only';
+  accessLevel: 'full_edit' | 'full_view' | 'limited_view';
   accessTiming: 'immediate' | 'upon_passing';
   invitationUrl: string;
 }

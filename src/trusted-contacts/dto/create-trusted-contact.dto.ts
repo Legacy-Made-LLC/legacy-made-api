@@ -7,7 +7,7 @@ export const createTrustedContactSchema = z.object({
   firstName: z.string().min(1),
   lastName: z.string().min(1),
   relationship: z.string().optional(),
-  accessLevel: z.enum(['full_edit', 'full_view', 'limited_view', 'view_only']),
+  accessLevel: z.enum(['full_edit', 'full_view', 'limited_view']),
   accessTiming: z.enum(['immediate', 'upon_passing']),
   notes: z.string().optional(),
 }) satisfies ZodType<

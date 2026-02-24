@@ -1,18 +1,18 @@
 import {
-  Controller,
-  Get,
-  Post,
   Body,
-  Patch,
-  Param,
+  Controller,
   Delete,
-  ParseUUIDPipe,
+  Get,
   HttpCode,
   HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
 } from '@nestjs/common';
-import { TrustedContactsService } from './trusted-contacts.service';
 import { CreateTrustedContactDto } from './dto/create-trusted-contact.dto';
 import { UpdateTrustedContactDto } from './dto/update-trusted-contact.dto';
+import { TrustedContactsService } from './trusted-contacts.service';
 
 @Controller('plans/:planId/trusted-contacts')
 export class TrustedContactsController {
