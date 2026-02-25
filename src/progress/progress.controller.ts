@@ -6,14 +6,20 @@ import {
   Param,
   ParseUUIDPipe,
   Put,
+  UseGuards,
 } from '@nestjs/common';
 import { ParseKeyPipe } from '../common/parse-key.pipe';
+import {
+  PlanAccessGuard,
+  RequiresAccessLevel,
+} from '../plan-access/plan-access.guard';
 import { UpsertProgressDto } from './dto';
 import { ProgressService } from './progress.service';
 
 // No EntitlementsGuard — progress is cross-cutting UI state, not a gated pillar.
-// RLS still enforces plan ownership via app.user_id.
+// PlanAccessGuard handles both owner and trusted contact access.
 @Controller('plans/:planId/progress')
+@UseGuards(PlanAccessGuard)
 export class ProgressController {
   constructor(private readonly progressService: ProgressService) {}
 
@@ -22,6 +28,7 @@ export class ProgressController {
    * PUT /plans/:planId/progress/:key
    */
   @Put(':key')
+  @RequiresAccessLevel('full_edit')
   upsert(
     @Param('planId', ParseUUIDPipe) planId: string,
     @Param('key', ParseKeyPipe) key: string,
@@ -56,6 +63,7 @@ export class ProgressController {
    * DELETE /plans/:planId/progress/:key
    */
   @Delete(':key')
+  @RequiresAccessLevel('full_edit')
   remove(
     @Param('planId', ParseUUIDPipe) planId: string,
     @Param('key', ParseKeyPipe) key: string,

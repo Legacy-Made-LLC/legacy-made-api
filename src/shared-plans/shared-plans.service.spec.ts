@@ -1,5 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ActivityLogService } from '../activity-log/activity-log.service';
 import { DbService } from '../db/db.service';
+import { EmailService } from '../email/email.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import { SharedPlansService } from './shared-plans.service';
 
@@ -27,6 +29,17 @@ describe('SharedPlansService', () => {
         {
           provide: ApiClsService,
           useValue: mockClsService,
+        },
+        {
+          provide: ActivityLogService,
+          useValue: { log: jest.fn() },
+        },
+        {
+          provide: EmailService,
+          useValue: {
+            sendAccessAccepted: jest.fn(),
+            sendAccessDeclined: jest.fn(),
+          },
         },
       ],
     }).compile();

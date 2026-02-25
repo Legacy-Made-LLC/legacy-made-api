@@ -1,4 +1,12 @@
-import { Controller, Get, Param, ParseUUIDPipe } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+} from '@nestjs/common';
 import { SharedPlansService } from './shared-plans.service';
 
 @Controller('shared-plans')
@@ -25,5 +33,24 @@ export class SharedPlansController {
   @Get(':planId')
   findOne(@Param('planId', ParseUUIDPipe) planId: string) {
     return this.sharedPlansService.findOne(planId);
+  }
+
+  /**
+   * Accept a pending invitation.
+   * POST /shared-plans/:planId/accept
+   */
+  @Post(':planId/accept')
+  accept(@Param('planId', ParseUUIDPipe) planId: string) {
+    return this.sharedPlansService.acceptInvitation(planId);
+  }
+
+  /**
+   * Decline a pending invitation.
+   * POST /shared-plans/:planId/decline
+   */
+  @Post(':planId/decline')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  decline(@Param('planId', ParseUUIDPipe) planId: string) {
+    return this.sharedPlansService.declineInvitation(planId);
   }
 }

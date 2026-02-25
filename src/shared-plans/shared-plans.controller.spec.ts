@@ -8,6 +8,8 @@ describe('SharedPlansController', () => {
   const mockSharedPlansService = {
     findAll: jest.fn(),
     findOne: jest.fn(),
+    acceptInvitation: jest.fn(),
+    declineInvitation: jest.fn(),
   };
 
   beforeEach(async () => {

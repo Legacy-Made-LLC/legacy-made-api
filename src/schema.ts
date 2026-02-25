@@ -417,7 +417,11 @@ export const progress = pgTable(
     uniqueIndex('progress_plan_id_key_idx').on(table.planId, table.key),
     index('progress_plan_id_idx').on(table.planId),
     shouldBypassRlsPolicy(),
-    userOwnsPlanPolicy(table.planId),
+    ownerOrTrustedContactPolicy(table.planId, [
+      'full_edit',
+      'full_view',
+      'limited_view',
+    ]),
   ],
 ).enableRLS();
 

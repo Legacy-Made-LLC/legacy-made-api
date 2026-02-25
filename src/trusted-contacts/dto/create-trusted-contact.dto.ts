@@ -3,12 +3,13 @@ import { type NewTrustedContact } from 'src/schema';
 import { z, ZodType } from 'zod';
 
 export const createTrustedContactSchema = z.object({
-  email: z.string().email(),
+  email: z.email(),
   firstName: z.string().min(1),
   lastName: z.string().min(1),
   relationship: z.string().optional(),
   accessLevel: z.enum(['full_edit', 'full_view', 'limited_view']),
-  accessTiming: z.enum(['immediate', 'upon_passing']),
+  // TODO: Uncomment for MVP. Not implementing anything but immediate access for now.
+  accessTiming: z.literal('immediate'), // z.enum(['immediate', 'upon_passing']),
   notes: z.string().optional(),
 }) satisfies ZodType<
   Omit<

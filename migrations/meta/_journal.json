@@ -64,6 +64,13 @@
       "when": 1771965421532,
       "tag": "0008_busy_talon",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1771974327670,
+      "tag": "0009_silly_vivisector",
+      "breakpoints": true
     }
   ]
 }

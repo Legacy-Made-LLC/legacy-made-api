@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { PlanAccessGuard } from '../plan-access/plan-access.guard';
 import { ProgressController } from './progress.controller';
 import { ProgressService } from './progress.service';
 
@@ -21,7 +22,10 @@ describe('ProgressController', () => {
           useValue: mockProgressService,
         },
       ],
-    }).compile();
+    })
+      .overrideGuard(PlanAccessGuard)
+      .useValue({ canActivate: jest.fn().mockReturnValue(true) })
+      .compile();
 
     controller = module.get<ProgressController>(ProgressController);
     jest.clearAllMocks();
