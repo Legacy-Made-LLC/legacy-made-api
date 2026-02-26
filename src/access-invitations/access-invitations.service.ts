@@ -1,15 +1,16 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
-  BadRequestException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { eq, and } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { DbService } from '../db/db.service';
 import { EmailService } from '../email/email.service';
-import { trustedContacts, users, plans, type TrustedContact } from '../schema';
+import { ApiClsService } from '../lib/api-cls.service';
+import { plans, trustedContacts, users, type TrustedContact } from '../schema';
 import { InvitationTokenService } from '../trusted-contacts/invitation-token.service';
 
 export interface InvitationDetails {
@@ -30,6 +31,7 @@ export class AccessInvitationsService {
 
   constructor(
     private readonly db: DbService,
+    private readonly cls: ApiClsService,
     private readonly emailService: EmailService,
     private readonly invitationTokenService: InvitationTokenService,
     private readonly activityLog: ActivityLogService,
@@ -91,8 +93,8 @@ export class AccessInvitationsService {
    */
   async acceptInvitation(
     token: string,
-    currentUserId: string,
   ): Promise<Omit<TrustedContact, 'notes'>> {
+    const currentUserId = this.cls.requireUserId();
     // Verify token
     const payload = this.invitationTokenService.verifyToken(token);
 
@@ -256,7 +258,8 @@ export class AccessInvitationsService {
    * Self-revoke access (authenticated endpoint)
    * Trusted contact removes their own access to a plan
    */
-  async revokeOwnAccess(planId: string, currentUserId: string): Promise<void> {
+  async revokeOwnAccess(planId: string): Promise<void> {
+    const currentUserId = this.cls.requireUserId();
     return this.db.bypassRls(async (tx) => {
       // Find the trusted contact record for this user and plan
       const [trustedContact] = await tx

@@ -44,7 +44,7 @@ export const configSchema = z.object({
 
   // INVITATION TOKENS
   INVITATION_TOKEN_SECRET: z.string(),
-  INVITATION_BASE_URL: z.string().url().default('https://app.mylegacymade.com'),
+  INVITATION_BASE_URL: z.url().default('https://app.mylegacymade.com'),
 
   // FILE UPLOAD
   MAX_FILE_SIZE_BYTES: z.coerce

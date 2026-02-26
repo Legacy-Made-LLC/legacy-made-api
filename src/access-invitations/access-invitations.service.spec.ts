@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { DbService } from '../db/db.service';
 import { EmailService } from '../email/email.service';
+import { ApiClsService } from '../lib/api-cls.service';
 import { InvitationTokenService } from '../trusted-contacts/invitation-token.service';
 import { AccessInvitationsService } from './access-invitations.service';
 
@@ -32,6 +33,10 @@ describe('AccessInvitationsService', () => {
         {
           provide: DbService,
           useValue: mockDbService,
+        },
+        {
+          provide: ApiClsService,
+          useValue: { requireUserId: jest.fn(() => 'user_123') },
         },
         {
           provide: EmailService,

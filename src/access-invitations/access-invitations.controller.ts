@@ -6,13 +6,10 @@ import {
   Param,
   HttpCode,
   HttpStatus,
-  Req,
   ParseUUIDPipe,
-  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
-import type { Request } from 'express';
 import { Public } from '../auth/auth.guard';
 import { AccessInvitationsService } from './access-invitations.service';
 
@@ -40,15 +37,10 @@ export class AccessInvitationsController {
   /**
    * POST /access-invitations/:token/accept
    * Accept an invitation (authenticated)
-   * Requires current user from request (set by auth middleware)
    */
   @Post(':token/accept')
-  acceptInvitation(@Param('token') token: string, @Req() req: Request) {
-    const currentUserId = (req as any).auth?.userId;
-    if (!currentUserId) {
-      throw new UnauthorizedException('Authentication required');
-    }
-    return this.accessInvitationsService.acceptInvitation(token, currentUserId);
+  acceptInvitation(@Param('token') token: string) {
+    return this.accessInvitationsService.acceptInvitation(token);
   }
 
   /**
@@ -73,14 +65,7 @@ export class AccessInvitationsController {
    */
   @Delete('plans/:planId/my-access')
   @HttpCode(HttpStatus.NO_CONTENT)
-  revokeOwnAccess(
-    @Param('planId', ParseUUIDPipe) planId: string,
-    @Req() req: Request,
-  ) {
-    const currentUserId = (req as any).auth?.userId;
-    if (!currentUserId) {
-      throw new UnauthorizedException('Authentication required');
-    }
-    return this.accessInvitationsService.revokeOwnAccess(planId, currentUserId);
+  revokeOwnAccess(@Param('planId', ParseUUIDPipe) planId: string) {
+    return this.accessInvitationsService.revokeOwnAccess(planId);
   }
 }
