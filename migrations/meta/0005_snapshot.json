@@ -1,5 +1,5 @@
 {
-  "id": "2ae12df3-b73d-45a7-9f83-87dea169d78b",
+  "id": "a9e6642b-7776-49b9-84c2-02cf34e28df7",
   "prevId": "e2e603e3-e0c0-4a7a-8542-f5f135717c3a",
   "version": "7",
   "dialect": "postgresql",
@@ -165,7 +165,7 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"entries\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit', 'full_view')\n    )\n  )"
         },
         "crud-public-policy-insert": {
           "name": "crud-public-policy-insert",
@@ -174,7 +174,7 @@
           "to": [
             "public"
           ],
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "withCheck": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"entries\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )"
         },
         "crud-public-policy-update": {
           "name": "crud-public-policy-update",
@@ -183,8 +183,8 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n",
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"entries\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )",
+          "withCheck": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"entries\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )"
         },
         "crud-public-policy-delete": {
           "name": "crud-public-policy-delete",
@@ -193,7 +193,7 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"entries\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"entries\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )"
         }
       },
       "checkConstraints": {},
@@ -433,7 +433,7 @@
           "to": [
             "public"
           ],
-          "using": "\n        (\n          \"files\".\"entry_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM entries e\n            JOIN plans p ON p.id = e.plan_id\n            WHERE e.id = \"files\".\"entry_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n        OR\n        (\n          \"files\".\"wish_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM wishes w\n            JOIN plans p ON p.id = w.plan_id\n            WHERE w.id = \"files\".\"wish_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n        OR\n        (\n          \"files\".\"message_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM messages m\n            JOIN plans p ON p.id = m.plan_id\n            WHERE m.id = \"files\".\"message_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n      "
+          "using": "\n        (\n          \"files\".\"entry_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM entries e\n            JOIN plans p ON p.id = e.plan_id\n            WHERE e.id = \"files\".\"entry_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = e.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level IN ('full_edit', 'full_view')\n              )\n            )\n          )\n        )\n        OR\n        (\n          \"files\".\"wish_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM wishes w\n            JOIN plans p ON p.id = w.plan_id\n            WHERE w.id = \"files\".\"wish_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = w.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level IN ('full_edit', 'full_view', 'limited_view')\n              )\n            )\n          )\n        )\n        OR\n        (\n          \"files\".\"message_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM messages m\n            JOIN plans p ON p.id = m.plan_id\n            WHERE m.id = \"files\".\"message_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = m.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level IN ('full_edit', 'full_view', 'limited_view')\n              )\n            )\n          )\n        )\n      "
         },
         "crud-public-policy-insert": {
           "name": "crud-public-policy-insert",
@@ -442,7 +442,7 @@
           "to": [
             "public"
           ],
-          "withCheck": "\n        (\n          \"files\".\"entry_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM entries e\n            JOIN plans p ON p.id = e.plan_id\n            WHERE e.id = \"files\".\"entry_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n        OR\n        (\n          \"files\".\"wish_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM wishes w\n            JOIN plans p ON p.id = w.plan_id\n            WHERE w.id = \"files\".\"wish_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n        OR\n        (\n          \"files\".\"message_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM messages m\n            JOIN plans p ON p.id = m.plan_id\n            WHERE m.id = \"files\".\"message_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n      "
+          "withCheck": "\n        (\n          \"files\".\"entry_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM entries e\n            JOIN plans p ON p.id = e.plan_id\n            WHERE e.id = \"files\".\"entry_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = e.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level = 'full_edit'\n              )\n            )\n          )\n        )\n        OR\n        (\n          \"files\".\"wish_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM wishes w\n            JOIN plans p ON p.id = w.plan_id\n            WHERE w.id = \"files\".\"wish_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = w.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level = 'full_edit'\n              )\n            )\n          )\n        )\n        OR\n        (\n          \"files\".\"message_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM messages m\n            JOIN plans p ON p.id = m.plan_id\n            WHERE m.id = \"files\".\"message_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = m.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level = 'full_edit'\n              )\n            )\n          )\n        )\n      "
         },
         "crud-public-policy-update": {
           "name": "crud-public-policy-update",
@@ -451,8 +451,8 @@
           "to": [
             "public"
           ],
-          "using": "\n        (\n          \"files\".\"entry_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM entries e\n            JOIN plans p ON p.id = e.plan_id\n            WHERE e.id = \"files\".\"entry_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n        OR\n        (\n          \"files\".\"wish_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM wishes w\n            JOIN plans p ON p.id = w.plan_id\n            WHERE w.id = \"files\".\"wish_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n        OR\n        (\n          \"files\".\"message_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM messages m\n            JOIN plans p ON p.id = m.plan_id\n            WHERE m.id = \"files\".\"message_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n      ",
-          "withCheck": "\n        (\n          \"files\".\"entry_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM entries e\n            JOIN plans p ON p.id = e.plan_id\n            WHERE e.id = \"files\".\"entry_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n        OR\n        (\n          \"files\".\"wish_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM wishes w\n            JOIN plans p ON p.id = w.plan_id\n            WHERE w.id = \"files\".\"wish_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n        OR\n        (\n          \"files\".\"message_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM messages m\n            JOIN plans p ON p.id = m.plan_id\n            WHERE m.id = \"files\".\"message_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n      "
+          "using": "\n        (\n          \"files\".\"entry_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM entries e\n            JOIN plans p ON p.id = e.plan_id\n            WHERE e.id = \"files\".\"entry_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = e.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level = 'full_edit'\n              )\n            )\n          )\n        )\n        OR\n        (\n          \"files\".\"wish_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM wishes w\n            JOIN plans p ON p.id = w.plan_id\n            WHERE w.id = \"files\".\"wish_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = w.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level = 'full_edit'\n              )\n            )\n          )\n        )\n        OR\n        (\n          \"files\".\"message_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM messages m\n            JOIN plans p ON p.id = m.plan_id\n            WHERE m.id = \"files\".\"message_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = m.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level = 'full_edit'\n              )\n            )\n          )\n        )\n      ",
+          "withCheck": "\n        (\n          \"files\".\"entry_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM entries e\n            JOIN plans p ON p.id = e.plan_id\n            WHERE e.id = \"files\".\"entry_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = e.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level = 'full_edit'\n              )\n            )\n          )\n        )\n        OR\n        (\n          \"files\".\"wish_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM wishes w\n            JOIN plans p ON p.id = w.plan_id\n            WHERE w.id = \"files\".\"wish_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = w.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level = 'full_edit'\n              )\n            )\n          )\n        )\n        OR\n        (\n          \"files\".\"message_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM messages m\n            JOIN plans p ON p.id = m.plan_id\n            WHERE m.id = \"files\".\"message_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = m.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level = 'full_edit'\n              )\n            )\n          )\n        )\n      "
         },
         "crud-public-policy-delete": {
           "name": "crud-public-policy-delete",
@@ -461,7 +461,7 @@
           "to": [
             "public"
           ],
-          "using": "\n        (\n          \"files\".\"entry_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM entries e\n            JOIN plans p ON p.id = e.plan_id\n            WHERE e.id = \"files\".\"entry_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n        OR\n        (\n          \"files\".\"wish_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM wishes w\n            JOIN plans p ON p.id = w.plan_id\n            WHERE w.id = \"files\".\"wish_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n        OR\n        (\n          \"files\".\"message_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM messages m\n            JOIN plans p ON p.id = m.plan_id\n            WHERE m.id = \"files\".\"message_id\"\n            AND p.user_id = current_setting('app.user_id', true)\n          )\n        )\n      "
+          "using": "\n        (\n          \"files\".\"entry_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM entries e\n            JOIN plans p ON p.id = e.plan_id\n            WHERE e.id = \"files\".\"entry_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = e.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level = 'full_edit'\n              )\n            )\n          )\n        )\n        OR\n        (\n          \"files\".\"wish_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM wishes w\n            JOIN plans p ON p.id = w.plan_id\n            WHERE w.id = \"files\".\"wish_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = w.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level = 'full_edit'\n              )\n            )\n          )\n        )\n        OR\n        (\n          \"files\".\"message_id\" IS NOT NULL AND EXISTS (\n            SELECT 1 FROM messages m\n            JOIN plans p ON p.id = m.plan_id\n            WHERE m.id = \"files\".\"message_id\"\n            AND (\n              p.user_id = current_setting('app.user_id', true)\n              OR EXISTS (\n                SELECT 1 FROM trusted_contacts tc\n                WHERE tc.plan_id = m.plan_id\n                AND tc.clerk_user_id = current_setting('app.user_id', true)\n                AND tc.access_status = 'accepted'\n                AND tc.access_timing = 'immediate'\n                AND tc.access_level = 'full_edit'\n              )\n            )\n          )\n        )\n      "
         }
       },
       "checkConstraints": {},
@@ -628,7 +628,7 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"messages\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit', 'full_view', 'limited_view')\n    )\n  )"
         },
         "crud-public-policy-insert": {
           "name": "crud-public-policy-insert",
@@ -637,7 +637,7 @@
           "to": [
             "public"
           ],
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "withCheck": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"messages\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )"
         },
         "crud-public-policy-update": {
           "name": "crud-public-policy-update",
@@ -646,8 +646,8 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n",
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"messages\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )",
+          "withCheck": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"messages\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )"
         },
         "crud-public-policy-delete": {
           "name": "crud-public-policy-delete",
@@ -656,7 +656,7 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"messages\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"messages\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )"
         }
       },
       "checkConstraints": {},
@@ -832,7 +832,7 @@
           "to": [
             "public"
           ],
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"plan_activity_log\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "withCheck": "false"
         },
         "crud-public-policy-update": {
           "name": "crud-public-policy-update",
@@ -841,8 +841,8 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"plan_activity_log\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n",
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"plan_activity_log\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "false",
+          "withCheck": "false"
         },
         "crud-public-policy-delete": {
           "name": "crud-public-policy-delete",
@@ -851,7 +851,16 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"plan_activity_log\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "false"
+        },
+        "plan_activity_log_insert": {
+          "name": "plan_activity_log_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": [
+            "public"
+          ],
+          "withCheck": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"plan_activity_log\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"plan_activity_log\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit', 'full_view', 'limited_view')\n    )\n  )"
         }
       },
       "checkConstraints": {},
@@ -1112,7 +1121,7 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"progress\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"progress\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"progress\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit', 'full_view', 'limited_view')\n    )\n  )"
         },
         "crud-public-policy-insert": {
           "name": "crud-public-policy-insert",
@@ -1121,7 +1130,7 @@
           "to": [
             "public"
           ],
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"progress\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "withCheck": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"progress\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"progress\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )"
         },
         "crud-public-policy-update": {
           "name": "crud-public-policy-update",
@@ -1130,8 +1139,8 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"progress\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n",
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"progress\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"progress\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"progress\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )",
+          "withCheck": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"progress\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"progress\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )"
         },
         "crud-public-policy-delete": {
           "name": "crud-public-policy-delete",
@@ -1140,7 +1149,7 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"progress\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"progress\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"progress\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )"
         }
       },
       "checkConstraints": {},
@@ -1409,6 +1418,27 @@
         }
       },
       "indexes": {
+        "trusted_contacts_plan_email_uniq": {
+          "name": "trusted_contacts_plan_email_uniq",
+          "columns": [
+            {
+              "expression": "plan_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "email",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "trusted_contacts_plan_id_idx": {
           "name": "trusted_contacts_plan_id_idx",
           "columns": [
@@ -1531,6 +1561,15 @@
             "public"
           ],
           "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"trusted_contacts\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+        },
+        "trusted_contacts_self_read": {
+          "name": "trusted_contacts_self_read",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": [
+            "public"
+          ],
+          "using": "\"trusted_contacts\".\"clerk_user_id\" = current_setting('app.user_id', true)"
         }
       },
       "checkConstraints": {},
@@ -1545,6 +1584,12 @@
           "type": "text",
           "primaryKey": true,
           "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "first_name": {
           "name": "first_name",
@@ -1795,7 +1840,7 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"wishes\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit', 'full_view', 'limited_view')\n    )\n  )"
         },
         "crud-public-policy-insert": {
           "name": "crud-public-policy-insert",
@@ -1804,7 +1849,7 @@
           "to": [
             "public"
           ],
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "withCheck": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"wishes\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )"
         },
         "crud-public-policy-update": {
           "name": "crud-public-policy-update",
@@ -1813,8 +1858,8 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n",
-          "withCheck": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"wishes\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )",
+          "withCheck": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"wishes\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )"
         },
         "crud-public-policy-delete": {
           "name": "crud-public-policy-delete",
@@ -1823,7 +1868,7 @@
           "to": [
             "public"
           ],
-          "using": "\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n"
+          "using": "(\n  EXISTS (\n    SELECT 1 FROM plans \n    WHERE plans.id = \"wishes\".\"plan_id\" \n    AND plans.user_id = current_setting('app.user_id', true)\n  )\n) OR (\n    EXISTS (\n      SELECT 1 FROM trusted_contacts\n      WHERE trusted_contacts.plan_id = \"wishes\".\"plan_id\"\n      AND trusted_contacts.clerk_user_id = current_setting('app.user_id', true)\n      AND trusted_contacts.access_status = 'accepted'\n      AND trusted_contacts.access_timing = 'immediate'\n      AND trusted_contacts.access_level IN ('full_edit')\n    )\n  )"
         }
       },
       "checkConstraints": {},

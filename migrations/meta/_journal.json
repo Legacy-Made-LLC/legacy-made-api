@@ -40,36 +40,8 @@
     {
       "idx": 5,
       "version": "7",
-      "when": 1771088657453,
-      "tag": "0005_free_bucky",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1771953619283,
-      "tag": "0006_next_mariko_yashida",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1771955192060,
-      "tag": "0007_freezing_miek",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1771965421532,
-      "tag": "0008_busy_talon",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1771974327670,
-      "tag": "0009_silly_vivisector",
+      "when": 1772133509253,
+      "tag": "0005_gray_blur",
       "breakpoints": true
     }
   ]
