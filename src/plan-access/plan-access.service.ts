@@ -8,6 +8,7 @@ import { plans, trustedContacts } from '../schema';
 export interface PlanAccessContext {
   role: PlanAccessRole;
   accessLevel?: AccessLevel;
+  ownerId: string;
 }
 
 @Injectable()
@@ -39,13 +40,17 @@ export class PlanAccessService {
         .where(and(eq(plans.id, planId), eq(plans.userId, userId)));
 
       if (ownedPlan) {
-        return { role: 'owner' as const };
+        return { role: 'owner' as const, ownerId: userId };
       }
 
       // Check trusted contact access
       const [contact] = await tx
-        .select({ accessLevel: trustedContacts.accessLevel })
+        .select({
+          accessLevel: trustedContacts.accessLevel,
+          planOwnerId: plans.userId,
+        })
         .from(trustedContacts)
+        .innerJoin(plans, eq(trustedContacts.planId, plans.id))
         .where(
           and(
             eq(trustedContacts.planId, planId),
@@ -59,6 +64,7 @@ export class PlanAccessService {
         return {
           role: 'trusted_contact' as const,
           accessLevel: contact.accessLevel as AccessLevel,
+          ownerId: contact.planOwnerId,
         };
       }
 

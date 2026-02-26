@@ -7,4 +7,6 @@ export interface ApiClsStore extends ClsStore {
   userId?: string;
   planAccessRole?: PlanAccessRole;
   planAccessLevel?: AccessLevel;
+  /** The plan owner's user ID. Set by PlanAccessGuard for all plan-scoped requests. */
+  planOwnerId?: string;
 }

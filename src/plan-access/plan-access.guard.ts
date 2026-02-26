@@ -67,6 +67,7 @@ export class PlanAccessGuard implements CanActivate {
 
     // Store access context in CLS for downstream use
     this.cls.set('planAccessRole', access.role);
+    this.cls.set('planOwnerId', access.ownerId);
     if (access.accessLevel) {
       this.cls.set('planAccessLevel', access.accessLevel);
     }

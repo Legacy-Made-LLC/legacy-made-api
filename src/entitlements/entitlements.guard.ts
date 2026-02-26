@@ -5,9 +5,7 @@ import {
   SetMetadata,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ApiClsService } from '../lib/api-cls.service';
 import { EntitlementsService } from './entitlements.service';
-import { EntitlementException } from './entitlements.exception';
 import { Pillar, QuotaFeature } from './entitlements.types';
 
 export const REQUIRED_PILLAR = 'required_pillar';
@@ -65,17 +63,9 @@ export class EntitlementsGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly entitlementsService: EntitlementsService,
-    private readonly cls: ApiClsService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    // Trusted contacts bypass entitlements — the plan owner's subscription covers the plan.
-    // Access level enforcement is handled by PlanAccessGuard and RLS policies.
-    const planAccessRole = this.cls.get('planAccessRole');
-    if (planAccessRole === 'trusted_contact') {
-      return true;
-    }
-
     const requiredPillar = this.reflector.getAllAndOverride<Pillar | undefined>(
       REQUIRED_PILLAR,
       [context.getHandler(), context.getClass()],
@@ -89,31 +79,12 @@ export class EntitlementsGuard implements CanActivate {
       QuotaFeature | undefined
     >(REQUIRED_QUOTA, [context.getHandler(), context.getClass()]);
 
-    // Check pillar edit access first (stricter)
-    if (requiredPillar) {
-      const result =
-        await this.entitlementsService.canAccessPillar(requiredPillar);
-      if (!result.allowed) {
-        throw new EntitlementException(result);
-      }
-    }
-
-    // Check pillar view access (less strict, allows view-only)
-    if (requiredViewPillar) {
-      const result =
-        await this.entitlementsService.canViewPillar(requiredViewPillar);
-      if (!result.allowed) {
-        throw new EntitlementException(result);
-      }
-    }
-
-    // Then check quota
-    if (requiredQuota) {
-      const result = await this.entitlementsService.canUseQuota(requiredQuota);
-      if (!result.allowed) {
-        throw new EntitlementException(result);
-      }
-    }
+    // All checks run in a single DB transaction inside the service
+    await this.entitlementsService.checkGuardEntitlements({
+      pillar: requiredPillar,
+      viewPillar: requiredViewPillar,
+      quota: requiredQuota,
+    });
 
     return true;
   }

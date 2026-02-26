@@ -70,19 +70,24 @@ describe('PlanAccessGuard', () => {
   });
 
   it('should allow access for plan owners', async () => {
-    mockPlanAccessService.getPlanAccess.mockResolvedValue({ role: 'owner' });
+    mockPlanAccessService.getPlanAccess.mockResolvedValue({ role: 'owner', ownerId: 'owner-user-id' });
 
     const context = createMockExecutionContext('some-plan-id');
     const result = await guard.canActivate(context);
 
     expect(result).toBe(true);
     expect(mockClsService.set).toHaveBeenCalledWith('planAccessRole', 'owner');
+    expect(mockClsService.set).toHaveBeenCalledWith(
+      'planOwnerId',
+      'owner-user-id',
+    );
   });
 
   it('should allow read access for trusted contacts', async () => {
     mockPlanAccessService.getPlanAccess.mockResolvedValue({
       role: 'trusted_contact',
       accessLevel: 'full_view',
+      ownerId: 'owner-user-id',
     });
     mockReflector.getAllAndOverride.mockReturnValue(undefined);
 
@@ -104,6 +109,7 @@ describe('PlanAccessGuard', () => {
     mockPlanAccessService.getPlanAccess.mockResolvedValue({
       role: 'trusted_contact',
       accessLevel: 'full_view',
+      ownerId: 'owner-user-id',
     });
     mockReflector.getAllAndOverride.mockImplementation((key) => {
       if (key === REQUIRED_ACCESS_LEVEL) return 'full_edit';
@@ -120,6 +126,7 @@ describe('PlanAccessGuard', () => {
     mockPlanAccessService.getPlanAccess.mockResolvedValue({
       role: 'trusted_contact',
       accessLevel: 'full_edit',
+      ownerId: 'owner-user-id',
     });
     mockReflector.getAllAndOverride.mockImplementation((key) => {
       if (key === REQUIRED_ACCESS_LEVEL) return 'full_edit';
