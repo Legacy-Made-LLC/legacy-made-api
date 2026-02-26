@@ -55,21 +55,31 @@ export class UsersService {
   }
 
   /**
-   * Update a user's profile information.
-   * Called by Clerk webhook when user data changes.
-   * Uses withRLSAs to set user context for RLS validation.
+   * Create or update a user record.
+   * Called by Clerk webhook on user.updated events.
+   * Creates the user with a default subscription if they don't exist yet.
    */
-  async updateUser(
-    id: string,
-    data: Partial<Omit<NewUser, 'id' | 'createdAt'>>,
-  ) {
+  async upsertUser(user: NewUser) {
     return this.db.bypassRls(async (tx) => {
-      const [updated] = await tx
-        .update(users)
-        .set(data)
-        .where(eq(users.id, id))
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { id, createdAt, ...updateData } = user;
+      const [upserted] = await tx
+        .insert(users)
+        .values(user)
+        .onConflictDoUpdate({
+          target: users.id,
+          set: updateData,
+        })
         .returning();
-      return updated;
+
+      // Ensure subscription exists (no-op if already present)
+      const tier = this.getDefaultSubscription();
+      await tx
+        .insert(subscriptions)
+        .values({ userId: upserted.id, tier })
+        .onConflictDoNothing();
+
+      return upserted;
     });
   }
 

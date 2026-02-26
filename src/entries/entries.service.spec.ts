@@ -1,4 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ActivityLogService } from '../activity-log/activity-log.service';
+import { ApiClsService } from '../lib/api-cls.service';
 import { EntriesService } from './entries.service';
 import { DbService } from '../db/db.service';
 import { EntitlementsService } from '../entitlements';
@@ -51,6 +53,14 @@ describe('EntriesService', () => {
         {
           provide: FilesService,
           useValue: mockFilesService,
+        },
+        {
+          provide: ApiClsService,
+          useValue: { get: jest.fn() },
+        },
+        {
+          provide: ActivityLogService,
+          useValue: { log: jest.fn() },
         },
       ],
     }).compile();

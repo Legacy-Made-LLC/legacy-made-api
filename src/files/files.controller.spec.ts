@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ApiClsService } from '../lib/api-cls.service';
 import { FilesController } from './files.controller';
 import { FilesService } from './files.service';
 import { MuxService } from './mux.service';
@@ -49,6 +50,10 @@ describe('FilesController', () => {
         {
           provide: EntitlementsService,
           useValue: mockEntitlementsService,
+        },
+        {
+          provide: ApiClsService,
+          useValue: { get: jest.fn() },
         },
       ],
     }).compile();

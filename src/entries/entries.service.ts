@@ -1,10 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
+import { ActivityLogService } from '../activity-log/activity-log.service';
 import { MetadataSchema } from '../common/dto/metadata-schema';
 import { groupBy } from '../common/utils/array';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { EntitlementsService } from '../entitlements';
 import { FilesService } from '../files/files.service';
+import { ApiClsService } from '../lib/api-cls.service';
 import { entries, Entry } from '../schema';
 import {
   CreateEntryDto,
@@ -29,6 +31,8 @@ export class EntriesService {
     private readonly db: DbService,
     private readonly entitlementsService: EntitlementsService,
     private readonly filesService: FilesService,
+    private readonly cls: ApiClsService,
+    private readonly activityLog: ActivityLogService,
   ) {}
 
   /**
@@ -39,8 +43,18 @@ export class EntriesService {
     return this.db.rls(async (tx) => {
       const [entry] = await tx
         .insert(entries)
-        .values({ ...createEntryDto, planId })
+        .values({
+          ...createEntryDto,
+          planId,
+          modifiedBy: this.cls.get('userId'),
+        })
         .returning();
+      await this.activityLog.log(tx, {
+        planId,
+        action: 'created',
+        resourceType: 'entry',
+        resourceId: entry.id,
+      });
       return entry;
     });
   }
@@ -148,9 +162,17 @@ export class EntriesService {
         .set({
           ...updateEntryDto,
           metadata: updatedMetadata,
+          modifiedBy: this.cls.get('userId'),
         })
         .where(eq(entries.id, id))
         .returning();
+
+      await this.activityLog.log(tx, {
+        planId: existing.planId,
+        action: 'updated',
+        resourceType: 'entry',
+        resourceId: id,
+      });
 
       return updated;
     });
@@ -162,8 +184,14 @@ export class EntriesService {
    */
   async remove(id: string) {
     return this.db.rls(async (tx) => {
-      await this.findOneInTx(tx, id);
+      const existing = await this.findOneInTx(tx, id);
       await tx.delete(entries).where(eq(entries.id, id));
+      await this.activityLog.log(tx, {
+        planId: existing.planId,
+        action: 'deleted',
+        resourceType: 'entry',
+        resourceId: id,
+      });
       return { deleted: true };
     });
   }
@@ -182,6 +210,7 @@ export class EntriesService {
       title: entry.title,
       notes: entry.notes,
       sortOrder: entry.sortOrder,
+      completionStatus: entry.completionStatus,
       metadata: entry.metadata as Record<string, unknown>,
       metadataSchema: entry.metadataSchema as MetadataSchema | null,
       files,

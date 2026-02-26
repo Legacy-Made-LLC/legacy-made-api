@@ -1,0 +1,74 @@
+import { Injectable } from '@nestjs/common';
+import { and, eq } from 'drizzle-orm';
+import { DbService } from '../db/db.service';
+import { ApiClsService } from '../lib/api-cls.service';
+import { AccessLevel, PlanAccessRole } from '../lib/types/cls';
+import { plans, trustedContacts } from '../schema';
+
+export interface PlanAccessContext {
+  role: PlanAccessRole;
+  accessLevel?: AccessLevel;
+  ownerId: string;
+}
+
+@Injectable()
+export class PlanAccessService {
+  constructor(
+    private readonly db: DbService,
+    private readonly cls: ApiClsService,
+  ) {}
+
+  /**
+   * Determine the current user's access role for a given plan.
+   *
+   * Uses bypassRls because:
+   * - The plans table RLS would filter out plans owned by others
+   * - The trusted_contacts RLS only allows plan owners to query
+   * - We need to check both ownership and trusted contact status
+   *
+   * Security: The query explicitly filters by the authenticated user's ID.
+   */
+  async getPlanAccess(planId: string): Promise<PlanAccessContext | null> {
+    const userId = this.cls.get('userId');
+    if (!userId) return null;
+
+    return this.db.bypassRls(async (tx) => {
+      // Check ownership first (fast path)
+      const [ownedPlan] = await tx
+        .select({ id: plans.id })
+        .from(plans)
+        .where(and(eq(plans.id, planId), eq(plans.userId, userId)));
+
+      if (ownedPlan) {
+        return { role: 'owner' as const, ownerId: userId };
+      }
+
+      // Check trusted contact access
+      const [contact] = await tx
+        .select({
+          accessLevel: trustedContacts.accessLevel,
+          planOwnerId: plans.userId,
+        })
+        .from(trustedContacts)
+        .innerJoin(plans, eq(trustedContacts.planId, plans.id))
+        .where(
+          and(
+            eq(trustedContacts.planId, planId),
+            eq(trustedContacts.clerkUserId, userId),
+            eq(trustedContacts.accessStatus, 'accepted'),
+            eq(trustedContacts.accessTiming, 'immediate'),
+          ),
+        );
+
+      if (contact) {
+        return {
+          role: 'trusted_contact' as const,
+          accessLevel: contact.accessLevel as AccessLevel,
+          ownerId: contact.planOwnerId,
+        };
+      }
+
+      return null;
+    });
+  }
+}

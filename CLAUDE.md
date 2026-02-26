@@ -354,3 +354,39 @@ SET LOCAL app.user_id = 'clerk_user_id';
 ```
 
 Migrations are in `./migrations/` directory.
+
+### Accessing the Current User
+
+Use `ApiClsService` (from `src/lib/api-cls.service.ts`) to get the authenticated user ID in services. **Never** extract the user ID from the request object in controllers and pass it to services. The CLS store is set by auth middleware and is globally available via `AuthModule`.
+
+```typescript
+// Good - service gets user ID from CLS
+@Injectable()
+export class MyService {
+  constructor(
+    private readonly db: DbService,
+    private readonly cls: ApiClsService,
+  ) {}
+
+  async doSomething() {
+    const userId = this.cls.requireUserId();
+    // ...
+  }
+}
+
+// Controller just delegates
+@Post()
+doSomething() {
+  return this.myService.doSomething();
+}
+
+// Bad - controller extracts user ID and passes it
+@Post()
+doSomething(@Req() req: Request) {
+  const userId = (req as any).auth?.userId;
+  if (!userId) throw new UnauthorizedException();
+  return this.myService.doSomething(userId);
+}
+```
+
+`ApiClsService` also provides `requirePlanAccessRole()` and `requirePlanAccessLevel()` for plan-scoped authorization context.

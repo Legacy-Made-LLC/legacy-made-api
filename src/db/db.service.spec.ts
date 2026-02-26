@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ClsService } from 'nestjs-cls';
 import type { Config } from 'src/config';
 import { ApiConfigService } from '../config/api-config.service';
+import { ApiClsService } from '../lib/api-cls.service';
 import { DbService } from './db.service';
 
 const mockConfig: Partial<Config> = {
@@ -24,7 +24,7 @@ describe('DbService', () => {
           },
         },
         {
-          provide: ClsService,
+          provide: ApiClsService,
           useValue: {
             get: jest.fn(),
             set: jest.fn(),

@@ -1,10 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
+import { ActivityLogService } from '../activity-log/activity-log.service';
 import { MetadataSchema } from '../common/dto/metadata-schema';
 import { groupBy } from '../common/utils/array';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { EntitlementsService } from '../entitlements';
 import { FilesService } from '../files/files.service';
+import { ApiClsService } from '../lib/api-cls.service';
 import { wishes, Wish } from '../schema';
 import {
   CreateWishDto,
@@ -29,6 +31,8 @@ export class WishesService {
     private readonly db: DbService,
     private readonly entitlementsService: EntitlementsService,
     private readonly filesService: FilesService,
+    private readonly cls: ApiClsService,
+    private readonly activityLog: ActivityLogService,
   ) {}
 
   /**
@@ -39,8 +43,18 @@ export class WishesService {
     return this.db.rls(async (tx) => {
       const [wish] = await tx
         .insert(wishes)
-        .values({ ...createWishDto, planId })
+        .values({
+          ...createWishDto,
+          planId,
+          modifiedBy: this.cls.get('userId'),
+        })
         .returning();
+      await this.activityLog.log(tx, {
+        planId,
+        action: 'created',
+        resourceType: 'wish',
+        resourceId: wish.id,
+      });
       return wish;
     });
   }
@@ -148,9 +162,17 @@ export class WishesService {
         .set({
           ...updateWishDto,
           metadata: updatedMetadata,
+          modifiedBy: this.cls.get('userId'),
         })
         .where(eq(wishes.id, id))
         .returning();
+
+      await this.activityLog.log(tx, {
+        planId: existing.planId,
+        action: 'updated',
+        resourceType: 'wish',
+        resourceId: id,
+      });
 
       return updated;
     });
@@ -162,8 +184,14 @@ export class WishesService {
    */
   async remove(id: string) {
     return this.db.rls(async (tx) => {
-      await this.findOneInTx(tx, id);
+      const existing = await this.findOneInTx(tx, id);
       await tx.delete(wishes).where(eq(wishes.id, id));
+      await this.activityLog.log(tx, {
+        planId: existing.planId,
+        action: 'deleted',
+        resourceType: 'wish',
+        resourceId: id,
+      });
       return { deleted: true };
     });
   }

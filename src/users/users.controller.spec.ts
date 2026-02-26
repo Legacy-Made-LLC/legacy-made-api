@@ -14,7 +14,7 @@ describe('UsersController', () => {
           provide: UsersService,
           useValue: {
             createUser: jest.fn(),
-            updateUser: jest.fn(),
+            upsertUser: jest.fn(),
             deleteUser: jest.fn(),
             findById: jest.fn(),
           },

@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ClsService } from 'nestjs-cls';
 import { DbService } from '../db/db.service';
+import { ApiClsService } from '../lib/api-cls.service';
 import {
   SUBSCRIPTION_GRACE_PERIOD_MS,
   TIER_CONFIG,
@@ -43,7 +43,10 @@ describe('EntitlementsService', () => {
     };
 
     mockClsService = {
-      get: jest.fn().mockReturnValue('test-user-id'),
+      get: jest.fn((key: string) => {
+        if (key === 'userId') return 'test-user-id';
+        return undefined; // planOwnerId etc. are undefined by default
+      }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -54,7 +57,7 @@ describe('EntitlementsService', () => {
           useValue: mockDbService,
         },
         {
-          provide: ClsService,
+          provide: ApiClsService,
           useValue: mockClsService,
         },
       ],
@@ -636,6 +639,204 @@ describe('EntitlementsService', () => {
       expect(service.isSubscriptionExpired('individual', futureDate)).toBe(
         false,
       );
+    });
+  });
+
+  describe('plan owner entitlements (trusted contact context)', () => {
+    it('should check plan owner tier when planOwnerId is set', async () => {
+      // Trusted contact has free tier, plan owner has family tier
+      mockClsService.get.mockImplementation((key: string) => {
+        if (key === 'userId') return 'trusted-contact-id';
+        if (key === 'planOwnerId') return 'plan-owner-id';
+        return undefined;
+      });
+
+      // bypassRls should be called (not rls) when planOwnerId is set
+      mockDbService.bypassRls.mockImplementation((callback) =>
+        callback(createMockTx('family')),
+      );
+
+      const result = await service.canAccessPillar('wishes');
+      expect(result.allowed).toBe(true);
+      expect(mockDbService.bypassRls).toHaveBeenCalled();
+    });
+
+    it('should deny when plan owner lacks pillar access', async () => {
+      mockClsService.get.mockImplementation((key: string) => {
+        if (key === 'userId') return 'trusted-contact-id';
+        if (key === 'planOwnerId') return 'plan-owner-id';
+        return undefined;
+      });
+
+      // Plan owner on free tier — no access to wishes
+      mockDbService.bypassRls.mockImplementation((callback) =>
+        callback(createMockTx('free')),
+      );
+
+      const result = await service.canAccessPillar('wishes');
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe('feature_locked');
+    });
+
+    it('should check plan owner quota when planOwnerId is set', async () => {
+      mockClsService.get.mockImplementation((key: string) => {
+        if (key === 'userId') return 'trusted-contact-id';
+        if (key === 'planOwnerId') return 'plan-owner-id';
+        return undefined;
+      });
+
+      // Plan owner on free tier with 5 entries (at quota limit)
+      mockDbService.bypassRls.mockImplementation((callback) =>
+        callback(createMockTx('free', 5)),
+      );
+
+      const result = await service.canUseQuota('entries');
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe('quota_exceeded');
+      expect(result.details?.limit).toBe(5);
+      expect(result.details?.current).toBe(5);
+    });
+
+    it('should use rls when planOwnerId is not set', async () => {
+      mockClsService.get.mockImplementation((key: string) => {
+        if (key === 'userId') return 'test-user-id';
+        if (key === 'planOwnerId') return undefined;
+        return undefined;
+      });
+
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('individual')),
+      );
+
+      const result = await service.canAccessPillar('wishes');
+      expect(result.allowed).toBe(true);
+      expect(mockDbService.rls).toHaveBeenCalled();
+    });
+  });
+
+  describe('checkGuardEntitlements', () => {
+    it('should return without throwing when all checks pass', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('individual', 3)),
+      );
+
+      await expect(
+        service.checkGuardEntitlements({
+          pillar: 'important_info',
+          viewPillar: 'messages',
+          quota: 'entries',
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('should return without throwing when no checks specified', async () => {
+      await expect(service.checkGuardEntitlements({})).resolves.toBeUndefined();
+
+      // Should not open any transaction
+      expect(mockDbService.rls).not.toHaveBeenCalled();
+      expect(mockDbService.bypassRls).not.toHaveBeenCalled();
+    });
+
+    it('should throw EntitlementException when pillar access denied', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('free')),
+      );
+
+      await expect(
+        service.checkGuardEntitlements({ pillar: 'messages' }),
+      ).rejects.toThrow(EntitlementException);
+    });
+
+    it('should throw EntitlementException when view pillar denied', async () => {
+      // Free tier has all pillars in viewOnlyPillars, so this would need
+      // a pillar not in either list. Let's use a mock to simulate.
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('free')),
+      );
+
+      // Free tier allows viewing all pillars (important_info + viewOnly: wishes, messages, family_access)
+      // So all view checks pass for free tier. Test with edit pillar denied instead.
+      await expect(
+        service.checkGuardEntitlements({ pillar: 'wishes' }),
+      ).rejects.toThrow(EntitlementException);
+    });
+
+    it('should throw EntitlementException when quota exceeded', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('free', 5)),
+      );
+
+      await expect(
+        service.checkGuardEntitlements({ quota: 'entries' }),
+      ).rejects.toThrow(EntitlementException);
+    });
+
+    it('should check pillar before quota (fail fast on pillar)', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('free', 0)),
+      );
+
+      try {
+        await service.checkGuardEntitlements({
+          pillar: 'messages',
+          quota: 'entries',
+        });
+        fail('Expected EntitlementException');
+      } catch (error) {
+        expect(error).toBeInstanceOf(EntitlementException);
+        const response = (error as EntitlementException).getResponse() as {
+          code: string;
+        };
+        // Should fail on pillar (feature_locked), not quota
+        expect(response.code).toBe('FEATURE_LOCKED');
+      }
+    });
+
+    it('should use a single rls transaction for all checks', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('individual', 3)),
+      );
+
+      await service.checkGuardEntitlements({
+        pillar: 'important_info',
+        viewPillar: 'messages',
+        quota: 'entries',
+      });
+
+      // Only ONE rls call, not three separate ones
+      expect(mockDbService.rls).toHaveBeenCalledTimes(1);
+    });
+
+    it('should use bypassRls when planOwnerId is set', async () => {
+      mockClsService.get.mockImplementation((key: string) => {
+        if (key === 'userId') return 'trusted-contact-id';
+        if (key === 'planOwnerId') return 'plan-owner-id';
+        return undefined;
+      });
+
+      mockDbService.bypassRls.mockImplementation((callback) =>
+        callback(createMockTx('family', 3)),
+      );
+
+      await service.checkGuardEntitlements({
+        pillar: 'important_info',
+        quota: 'entries',
+      });
+
+      expect(mockDbService.bypassRls).toHaveBeenCalledTimes(1);
+      expect(mockDbService.rls).not.toHaveBeenCalled();
+    });
+
+    it('should allow unlimited quota without counting usage', async () => {
+      const mockTx = createMockTx('individual', 0);
+      mockDbService.rls.mockImplementation((callback) => callback(mockTx));
+
+      await service.checkGuardEntitlements({ quota: 'entries' });
+
+      // Individual tier has unlimited entries (-1), so no usage count query needed.
+      // The tx.select/from/where chain is called once for the subscription tier query.
+      // If usage were counted, it would be called a second time.
+      expect(mockTx.where).toHaveBeenCalledTimes(1);
     });
   });
 

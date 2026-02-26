@@ -8,10 +8,9 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ApiClsStore } from 'src/lib/types/cls';
-import { ClsService } from 'nestjs-cls';
-import { CLERK_CLIENT } from 'src/lib/clerk/client';
 import type { Request as ExpressRequest } from 'express';
+import { ApiClsService } from 'src/lib/api-cls.service';
+import { CLERK_CLIENT } from 'src/lib/clerk/client';
 
 export const IS_PUBLIC_KEY = 'isPublic';
 export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
@@ -24,7 +23,7 @@ export class AuthGuard implements CanActivate {
   constructor(
     @Inject(CLERK_CLIENT) private readonly clerkClient: ClerkClient,
     private readonly reflector: Reflector,
-    private readonly cls: ClsService<ApiClsStore>,
+    private readonly cls: ApiClsService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {

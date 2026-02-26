@@ -1,15 +1,14 @@
 import pRetry from '@n8n/p-retry';
 import { Injectable } from '@nestjs/common';
-import { ClsService } from 'nestjs-cls';
 import { DbService } from '../db/db.service';
-import { ApiClsStore } from '../lib/types/cls';
+import { ApiClsService } from '../lib/api-cls.service';
 import { plans, users } from '../schema';
 
 @Injectable()
 export class PlansService {
   constructor(
     private readonly db: DbService,
-    private readonly cls: ClsService<ApiClsStore>,
+    private readonly cls: ApiClsService,
   ) {}
 
   /**

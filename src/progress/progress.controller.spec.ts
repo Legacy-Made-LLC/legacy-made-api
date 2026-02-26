@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { PlanAccessGuard } from '../plan-access/plan-access.guard';
 import { ProgressController } from './progress.controller';
 import { ProgressService } from './progress.service';
 
@@ -21,7 +22,10 @@ describe('ProgressController', () => {
           useValue: mockProgressService,
         },
       ],
-    }).compile();
+    })
+      .overrideGuard(PlanAccessGuard)
+      .useValue({ canActivate: jest.fn().mockReturnValue(true) })
+      .compile();
 
     controller = module.get<ProgressController>(ProgressController);
     jest.clearAllMocks();
@@ -34,7 +38,12 @@ describe('ProgressController', () => {
   describe('upsert', () => {
     it('should delegate to service with planId, key, and dto', async () => {
       const dto = { data: { step: 1 } };
-      const expected = { id: 'uuid-1', planId: 'plan-1', key: 'onboarding', ...dto };
+      const expected = {
+        id: 'uuid-1',
+        planId: 'plan-1',
+        key: 'onboarding',
+        ...dto,
+      };
       mockProgressService.upsert.mockResolvedValue(expected);
 
       const result = await controller.upsert('plan-1', 'onboarding', dto);

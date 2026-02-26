@@ -1,9 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { count, eq, sum } from 'drizzle-orm';
-import { ClsService } from 'nestjs-cls';
 import { DbService, DrizzleTransaction } from '../db/db.service';
-import { ApiClsStore } from '../lib/types/cls';
-import { entries, files, plans, subscriptions, wishes } from '../schema';
+import { ApiClsService } from '../lib/api-cls.service';
+import {
+  entries,
+  files,
+  messages,
+  plans,
+  subscriptions,
+  trustedContacts,
+  wishes,
+} from '../schema';
 import {
   NON_EXPIRING_TIERS,
   PILLAR_DISPLAY_NAMES,
@@ -25,8 +32,142 @@ import {
 export class EntitlementsService {
   constructor(
     private readonly db: DbService,
-    private readonly cls: ClsService<ApiClsStore>,
+    private readonly cls: ApiClsService,
   ) {}
+
+  // ---------------------------------------------------------------------------
+  // Helpers: resolve whose entitlements to check
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Get the user ID whose entitlements should be checked.
+   *
+   * When a trusted contact operates on a shared plan, planOwnerId is set in CLS
+   * by PlanAccessGuard. In that case we check the PLAN OWNER's entitlements,
+   * not the trusted contact's.
+   */
+  private getEntitlementUserId(): string {
+    const planOwnerId = this.cls.get('planOwnerId');
+    if (planOwnerId) return planOwnerId;
+
+    const userId = this.cls.get('userId');
+    if (!userId) throw new Error('No user ID in context');
+    return userId;
+  }
+
+  /**
+   * Whether we're checking entitlements for a plan owner on behalf of a
+   * trusted contact. When true, queries must use bypassRls because the
+   * current RLS context is the trusted contact's, not the plan owner's.
+   */
+  private isCheckingPlanOwner(): boolean {
+    return !!this.cls.get('planOwnerId');
+  }
+
+  /**
+   * Run a query function using the appropriate transaction context.
+   *
+   * When checking plan owner entitlements (trusted contact context), we need
+   * bypassRls because the subscriptions/plans tables have RLS policies that
+   * filter by app.user_id (which is the trusted contact, not the plan owner).
+   *
+   * For owner's own requests, we use the passed transaction (already in correct
+   * RLS context).
+   */
+  private async withEntitlementTx<T>(
+    tx: DrizzleTransaction,
+    fn: (effectiveTx: DrizzleTransaction, userId: string) => Promise<T>,
+  ): Promise<T> {
+    const userId = this.getEntitlementUserId();
+
+    if (this.isCheckingPlanOwner()) {
+      // Trusted contact: query plan owner's data in a separate bypassRls tx
+      return this.db.bypassRls(async (bypassTx) => fn(bypassTx, userId));
+    }
+
+    return fn(tx, userId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pure evaluation: check access against tier config (no DB queries)
+  // ---------------------------------------------------------------------------
+
+  private evaluatePillarAccess(
+    tier: SubscriptionTier,
+    pillar: Pillar,
+  ): EntitlementResult {
+    const config = TIER_CONFIG[tier];
+    if (config.pillars.includes(pillar)) {
+      return { allowed: true };
+    }
+    const suggestedTier = UPGRADE_PATH[tier];
+    return {
+      allowed: false,
+      reason: 'feature_locked',
+      message: `${PILLAR_DISPLAY_NAMES[pillar]} is not available on the ${config.name} plan`,
+      details: {
+        feature: pillar,
+        tier,
+        upgradeRequired: true,
+        suggestedTier,
+      },
+    };
+  }
+
+  private evaluateViewPillarAccess(
+    tier: SubscriptionTier,
+    pillar: Pillar,
+  ): EntitlementResult {
+    const config = TIER_CONFIG[tier];
+    if (
+      config.pillars.includes(pillar) ||
+      config.viewOnlyPillars.includes(pillar)
+    ) {
+      return { allowed: true };
+    }
+    const suggestedTier = UPGRADE_PATH[tier];
+    return {
+      allowed: false,
+      reason: 'feature_locked',
+      message: `${PILLAR_DISPLAY_NAMES[pillar]} is not available on the ${config.name} plan`,
+      details: {
+        feature: pillar,
+        tier,
+        upgradeRequired: true,
+        suggestedTier,
+      },
+    };
+  }
+
+  private evaluateQuota(
+    tier: SubscriptionTier,
+    feature: QuotaFeature,
+    current: number,
+  ): EntitlementResult {
+    const config = TIER_CONFIG[tier];
+    const limit = config.quotas[feature];
+    if (limit === -1 || current < limit) {
+      return { allowed: true };
+    }
+    const suggestedTier = UPGRADE_PATH[tier];
+    return {
+      allowed: false,
+      reason: 'quota_exceeded',
+      message: `You have reached the maximum number of ${QUOTA_DISPLAY_NAMES[feature]} for your plan`,
+      details: {
+        feature,
+        tier,
+        limit,
+        current,
+        upgradeRequired: true,
+        suggestedTier,
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tier
+  // ---------------------------------------------------------------------------
 
   /**
    * Get the current user's subscription tier.
@@ -41,35 +182,32 @@ export class EntitlementsService {
   /**
    * Get tier within an existing transaction.
    * Checks for subscription expiration and returns 'free' if expired.
+   *
+   * When planOwnerId is set in CLS (trusted contact context), this checks the
+   * plan OWNER's tier via a separate bypassRls transaction.
    */
   async getTierInTx(tx: DrizzleTransaction): Promise<SubscriptionTier> {
-    const userId = this.cls.get('userId');
-    if (!userId) {
-      throw new Error('No user ID in context');
-    }
+    return this.withEntitlementTx(tx, async (effectiveTx, userId) => {
+      const [subscription] = await effectiveTx
+        .select({
+          tier: subscriptions.tier,
+          currentPeriodEnd: subscriptions.currentPeriodEnd,
+        })
+        .from(subscriptions)
+        .where(eq(subscriptions.userId, userId));
 
-    const [subscription] = await tx
-      .select({
-        tier: subscriptions.tier,
-        currentPeriodEnd: subscriptions.currentPeriodEnd,
-      })
-      .from(subscriptions)
-      .where(eq(subscriptions.userId, userId));
+      if (!subscription) {
+        return 'free';
+      }
 
-    if (!subscription) {
-      // This shouldn't happen if user creation flow is correct,
-      // but handle it gracefully by returning free tier
-      return 'free';
-    }
+      const tier = subscription.tier as SubscriptionTier;
 
-    const tier = subscription.tier as SubscriptionTier;
+      if (this.isSubscriptionExpired(tier, subscription.currentPeriodEnd)) {
+        return 'free';
+      }
 
-    // Check if subscription has expired (with grace period)
-    if (this.isSubscriptionExpired(tier, subscription.currentPeriodEnd)) {
-      return 'free';
-    }
-
-    return tier;
+      return tier;
+    });
   }
 
   /**
@@ -97,10 +235,22 @@ export class EntitlementsService {
     return Date.now() > expirationWithGrace;
   }
 
+  // ---------------------------------------------------------------------------
+  // Pillar access
+  // ---------------------------------------------------------------------------
+
   /**
    * Check if the user can edit/create content in a specific pillar.
+   *
+   * When planOwnerId is set (trusted contact context), checks the plan
+   * owner's tier via bypassRls.
    */
   async canAccessPillar(pillar: Pillar): Promise<EntitlementResult> {
+    if (this.isCheckingPlanOwner()) {
+      return this.db.bypassRls(async (tx) => {
+        return this.canAccessPillarInTx(tx, pillar);
+      });
+    }
     return this.db.rls(async (tx) => {
       return this.canAccessPillarInTx(tx, pillar);
     });
@@ -114,30 +264,21 @@ export class EntitlementsService {
     pillar: Pillar,
   ): Promise<EntitlementResult> {
     const tier = await this.getTierInTx(tx);
-    const config = TIER_CONFIG[tier];
-
-    if (config.pillars.includes(pillar)) {
-      return { allowed: true };
-    }
-
-    const suggestedTier = UPGRADE_PATH[tier];
-    return {
-      allowed: false,
-      reason: 'feature_locked',
-      message: `${PILLAR_DISPLAY_NAMES[pillar]} is not available on the ${config.name} plan`,
-      details: {
-        feature: pillar,
-        tier,
-        upgradeRequired: true,
-        suggestedTier,
-      },
-    };
+    return this.evaluatePillarAccess(tier, pillar);
   }
 
   /**
    * Check if the user can view a specific pillar (view-only or full access).
+   *
+   * When planOwnerId is set (trusted contact context), checks the plan
+   * owner's tier via bypassRls.
    */
   async canViewPillar(pillar: Pillar): Promise<EntitlementResult> {
+    if (this.isCheckingPlanOwner()) {
+      return this.db.bypassRls(async (tx) => {
+        return this.canViewPillarInTx(tx, pillar);
+      });
+    }
     return this.db.rls(async (tx) => {
       return this.canViewPillarInTx(tx, pillar);
     });
@@ -151,34 +292,25 @@ export class EntitlementsService {
     pillar: Pillar,
   ): Promise<EntitlementResult> {
     const tier = await this.getTierInTx(tx);
-    const config = TIER_CONFIG[tier];
-
-    // Can view if user has full access OR view-only access
-    if (
-      config.pillars.includes(pillar) ||
-      config.viewOnlyPillars.includes(pillar)
-    ) {
-      return { allowed: true };
-    }
-
-    const suggestedTier = UPGRADE_PATH[tier];
-    return {
-      allowed: false,
-      reason: 'feature_locked',
-      message: `${PILLAR_DISPLAY_NAMES[pillar]} is not available on the ${config.name} plan`,
-      details: {
-        feature: pillar,
-        tier,
-        upgradeRequired: true,
-        suggestedTier,
-      },
-    };
+    return this.evaluateViewPillarAccess(tier, pillar);
   }
+
+  // ---------------------------------------------------------------------------
+  // Quota
+  // ---------------------------------------------------------------------------
 
   /**
    * Check if the user can use more of a quota feature.
+   *
+   * When planOwnerId is set (trusted contact context), checks the plan
+   * owner's quota via bypassRls.
    */
   async canUseQuota(feature: QuotaFeature): Promise<EntitlementResult> {
+    if (this.isCheckingPlanOwner()) {
+      return this.db.bypassRls(async (tx) => {
+        return this.canUseQuotaInTx(tx, feature);
+      });
+    }
     return this.db.rls(async (tx) => {
       return this.canUseQuotaInTx(tx, feature);
     });
@@ -201,43 +333,20 @@ export class EntitlementsService {
     }
 
     const current = await this.getUsageInTx(tx, feature);
-
-    if (current < limit) {
-      return { allowed: true };
-    }
-
-    const suggestedTier = UPGRADE_PATH[tier];
-    return {
-      allowed: false,
-      reason: 'quota_exceeded',
-      message: `You have reached the maximum number of ${QUOTA_DISPLAY_NAMES[feature]} for your plan`,
-      details: {
-        feature,
-        tier,
-        limit,
-        current,
-        upgradeRequired: true,
-        suggestedTier,
-      },
-    };
+    return this.evaluateQuota(tier, feature, current);
   }
 
   /**
-   * Get current usage for a quota feature.
-   * Returns counts from the relevant tables.
+   * Count usage directly within a transaction. Takes explicit userId parameter
+   * to avoid nesting withEntitlementTx when already in the right context.
    */
-  private async getUsageInTx(
+  private async countUsageInTx(
     tx: DrizzleTransaction,
+    userId: string,
     feature: QuotaFeature,
   ): Promise<number> {
-    const userId = this.cls.get('userId');
-    if (!userId) {
-      throw new Error('No user ID in context');
-    }
-
     switch (feature) {
       case 'entries': {
-        // Count all entries across user's plans
         const [result] = await tx
           .select({ count: count() })
           .from(entries)
@@ -247,7 +356,6 @@ export class EntitlementsService {
       }
 
       case 'wishes': {
-        // Count all wishes across user's plans
         const [result] = await tx
           .select({ count: count() })
           .from(wishes)
@@ -256,20 +364,29 @@ export class EntitlementsService {
         return result?.count ?? 0;
       }
 
-      case 'trusted_contacts':
-        // TODO: Implement when trusted_contacts table exists
-        return 0;
+      case 'trusted_contacts': {
+        const [tcResult] = await tx
+          .select({ count: count() })
+          .from(trustedContacts)
+          .innerJoin(plans, eq(trustedContacts.planId, plans.id))
+          .where(eq(plans.userId, userId));
+        return tcResult?.count ?? 0;
+      }
 
       case 'family_profiles':
         // TODO: Implement when family_profiles table exists
         return 0;
 
-      case 'legacy_messages':
-        // TODO: Implement when messages table exists
-        return 0;
+      case 'legacy_messages': {
+        const [msgResult] = await tx
+          .select({ count: count() })
+          .from(messages)
+          .innerJoin(plans, eq(messages.planId, plans.id))
+          .where(eq(plans.userId, userId));
+        return msgResult?.count ?? 0;
+      }
 
       case 'storage_mb': {
-        // Sum file sizes across all user's entries and wishes
         const [entryFilesResult] = await tx
           .select({ totalBytes: sum(files.sizeBytes) })
           .from(files)
@@ -287,7 +404,6 @@ export class EntitlementsService {
         const entryBytes = Number(entryFilesResult?.totalBytes ?? 0);
         const wishBytes = Number(wishFilesResult?.totalBytes ?? 0);
         const totalBytes = entryBytes + wishBytes;
-        // Convert bytes to MB (quota is in MB)
         return Math.ceil(totalBytes / (1024 * 1024));
       }
 
@@ -295,6 +411,98 @@ export class EntitlementsService {
         return 0;
     }
   }
+
+  /**
+   * Get current usage for a quota feature.
+   * Delegates to countUsageInTx via withEntitlementTx for correct RLS context.
+   */
+  private async getUsageInTx(
+    tx: DrizzleTransaction,
+    feature: QuotaFeature,
+  ): Promise<number> {
+    return this.withEntitlementTx(tx, (effectiveTx, userId) =>
+      this.countUsageInTx(effectiveTx, userId, feature),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Combined guard check (single transaction)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Run all entitlement checks for a guard in a single transaction.
+   * This avoids opening separate transactions for pillar and quota checks,
+   * reducing DB round trips from 3+ down to 1.
+   *
+   * Throws EntitlementException on the first failing check.
+   */
+  async checkGuardEntitlements(params: {
+    pillar?: Pillar;
+    viewPillar?: Pillar;
+    quota?: QuotaFeature;
+  }): Promise<void> {
+    const { pillar, viewPillar, quota } = params;
+
+    // Nothing to check
+    if (!pillar && !viewPillar && !quota) return;
+
+    const userId = this.getEntitlementUserId();
+
+    const runChecks = async (tx: DrizzleTransaction) => {
+      // Fetch tier ONCE
+      const [subscription] = await tx
+        .select({
+          tier: subscriptions.tier,
+          currentPeriodEnd: subscriptions.currentPeriodEnd,
+        })
+        .from(subscriptions)
+        .where(eq(subscriptions.userId, userId));
+
+      let tier: SubscriptionTier = 'free';
+      if (subscription) {
+        const rawTier = subscription.tier as SubscriptionTier;
+        tier = this.isSubscriptionExpired(
+          rawTier,
+          subscription.currentPeriodEnd,
+        )
+          ? 'free'
+          : rawTier;
+      }
+
+      // Check pillar edit access
+      if (pillar) {
+        const result = this.evaluatePillarAccess(tier, pillar);
+        if (!result.allowed) throw new EntitlementException(result);
+      }
+
+      // Check pillar view access
+      if (viewPillar) {
+        const result = this.evaluateViewPillarAccess(tier, viewPillar);
+        if (!result.allowed) throw new EntitlementException(result);
+      }
+
+      // Check quota
+      if (quota) {
+        const config = TIER_CONFIG[tier];
+        const limit = config.quotas[quota];
+        if (limit !== -1) {
+          const current = await this.countUsageInTx(tx, userId, quota);
+          const result = this.evaluateQuota(tier, quota, current);
+          if (!result.allowed) throw new EntitlementException(result);
+        }
+      }
+    };
+
+    if (this.isCheckingPlanOwner()) {
+      await this.db.bypassRls(runChecks);
+    } else {
+      await this.db.rls(runChecks);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Require helpers (throw on failure)
+  // ---------------------------------------------------------------------------
 
   /**
    * Require pillar access or throw an exception.
@@ -365,19 +573,48 @@ export class EntitlementsService {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Info & status
+  // ---------------------------------------------------------------------------
+
   /**
-   * Get full entitlement info for the current user.
-   * Useful for displaying in the UI.
+   * Get full entitlement info for the current context.
+   *
+   * When planOwnerId is set in CLS (trusted contact viewing a shared plan),
+   * returns the plan OWNER's entitlements via bypassRls. Otherwise returns
+   * the current user's entitlements.
    */
   async getEntitlementInfo(): Promise<EntitlementInfo> {
-    return this.db.rls(async (tx) => {
-      const tier = await this.getTierInTx(tx);
+    const userId = this.getEntitlementUserId();
+
+    const buildInfo = async (
+      tx: DrizzleTransaction,
+    ): Promise<EntitlementInfo> => {
+      const [subscription] = await tx
+        .select({
+          tier: subscriptions.tier,
+          currentPeriodEnd: subscriptions.currentPeriodEnd,
+        })
+        .from(subscriptions)
+        .where(eq(subscriptions.userId, userId));
+
+      let tier: SubscriptionTier = 'free';
+      if (subscription) {
+        const rawTier = subscription.tier as SubscriptionTier;
+        tier = this.isSubscriptionExpired(
+          rawTier,
+          subscription.currentPeriodEnd,
+        )
+          ? 'free'
+          : rawTier;
+      }
+
       const config = TIER_CONFIG[tier];
 
       const quotas = await Promise.all(
         (Object.keys(config.quotas) as QuotaFeature[]).map(async (feature) => {
           const limit = config.quotas[feature];
-          const current = await this.getUsageInTx(tx, feature);
+          const current = await this.countUsageInTx(tx, userId, feature);
           return {
             feature,
             displayName: QUOTA_DISPLAY_NAMES[feature],
@@ -396,7 +633,12 @@ export class EntitlementsService {
         viewOnlyPillars: config.viewOnlyPillars,
         quotas,
       };
-    });
+    };
+
+    if (this.isCheckingPlanOwner()) {
+      return this.db.bypassRls(buildInfo);
+    }
+    return this.db.rls(buildInfo);
   }
 
   /**

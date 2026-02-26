@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Reflector } from '@nestjs/core';
-import { ClsService } from 'nestjs-cls';
+import { ApiClsService } from '../lib/api-cls.service';
 import { AuthGuard } from './auth.guard';
 import { CLERK_CLIENT } from '../lib/clerk/client';
 
@@ -33,7 +33,7 @@ describe('AuthGuard', () => {
           useValue: mockReflector,
         },
         {
-          provide: ClsService,
+          provide: ApiClsService,
           useValue: mockClsService,
         },
       ],

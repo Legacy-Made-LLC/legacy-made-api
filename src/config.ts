@@ -34,6 +34,18 @@ export const configSchema = z.object({
   MUX_SIGNING_KEY_SECRET: z.string(),
   MUX_WEBHOOK_SECRET: z.string(),
 
+  // RESEND (Email Service)
+  RESEND_API_KEY: z.string(),
+  RESEND_FROM_EMAIL_INVITE: z.email().default('invite@notify.mylegacymade.com'),
+  RESEND_FROM_EMAIL_UPDATES: z
+    .email()
+    .default('updates@notify.mylegacymade.com'),
+  RESEND_FROM_NAME: z.string().default('Legacy Made'),
+
+  // INVITATION TOKENS
+  INVITATION_TOKEN_SECRET: z.string(),
+  INVITATION_BASE_URL: z.url().default('https://app.mylegacymade.com'),
+
   // FILE UPLOAD
   MAX_FILE_SIZE_BYTES: z.coerce
     .number()

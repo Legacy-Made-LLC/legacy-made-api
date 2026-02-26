@@ -6,7 +6,6 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { EntitlementsService } from './entitlements.service';
-import { EntitlementException } from './entitlements.exception';
 import { Pillar, QuotaFeature } from './entitlements.types';
 
 export const REQUIRED_PILLAR = 'required_pillar';
@@ -80,31 +79,12 @@ export class EntitlementsGuard implements CanActivate {
       QuotaFeature | undefined
     >(REQUIRED_QUOTA, [context.getHandler(), context.getClass()]);
 
-    // Check pillar edit access first (stricter)
-    if (requiredPillar) {
-      const result =
-        await this.entitlementsService.canAccessPillar(requiredPillar);
-      if (!result.allowed) {
-        throw new EntitlementException(result);
-      }
-    }
-
-    // Check pillar view access (less strict, allows view-only)
-    if (requiredViewPillar) {
-      const result =
-        await this.entitlementsService.canViewPillar(requiredViewPillar);
-      if (!result.allowed) {
-        throw new EntitlementException(result);
-      }
-    }
-
-    // Then check quota
-    if (requiredQuota) {
-      const result = await this.entitlementsService.canUseQuota(requiredQuota);
-      if (!result.allowed) {
-        throw new EntitlementException(result);
-      }
-    }
+    // All checks run in a single DB transaction inside the service
+    await this.entitlementsService.checkGuardEntitlements({
+      pillar: requiredPillar,
+      viewPillar: requiredViewPillar,
+      quota: requiredQuota,
+    });
 
     return true;
   }

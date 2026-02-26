@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { EntitlementsGuard, EntitlementsService } from '../entitlements';
+import { PlanAccessGuard } from '../plan-access/plan-access.guard';
 import { EntriesController } from './entries.controller';
 import { EntriesService } from './entries.service';
 
@@ -35,6 +36,8 @@ describe('EntriesController', () => {
         },
       ],
     })
+      .overrideGuard(PlanAccessGuard)
+      .useValue({ canActivate: jest.fn().mockReturnValue(true) })
       .overrideGuard(EntitlementsGuard)
       .useValue({ canActivate: jest.fn().mockReturnValue(true) })
       .compile();

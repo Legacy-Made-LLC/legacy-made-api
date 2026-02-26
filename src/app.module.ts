@@ -16,6 +16,12 @@ import { UsersModule } from './users/users.module';
 import { FilesModule } from './files/files.module';
 import { WishesModule } from './wishes/wishes.module';
 import { ProgressModule } from './progress/progress.module';
+import { EmailModule } from './email/email.module';
+import { TrustedContactsModule } from './trusted-contacts/trusted-contacts.module';
+import { AccessInvitationsModule } from './access-invitations/access-invitations.module';
+import { PlanAccessModule } from './plan-access/plan-access.module';
+import { SharedPlansModule } from './shared-plans/shared-plans.module';
+import { ActivityLogModule } from './activity-log/activity-log.module';
 
 @Module({
   imports: [
@@ -41,6 +47,7 @@ import { ProgressModule } from './progress/progress.module';
     ApiConfigModule,
     AuthModule, // Must come before DbModule for CLS to be available
     DbModule,
+    PlanAccessModule, // Must come after DbModule; provides PlanAccessGuard to controllers
     EntitlementsModule,
     UsersModule,
     EntriesModule,
@@ -49,6 +56,11 @@ import { ProgressModule } from './progress/progress.module';
     FilesModule,
     WishesModule,
     ProgressModule,
+    EmailModule,
+    TrustedContactsModule,
+    AccessInvitationsModule,
+    SharedPlansModule,
+    ActivityLogModule,
   ],
   providers: [
     {
