@@ -1,6 +1,6 @@
 import { Text } from '@react-email/components';
 import * as React from 'react';
-import { BaseEmail } from './base';
+import { BaseEmail, paragraph, secondaryText } from './base';
 
 interface AccessAcceptedEmailProps {
   ownerFirstName: string;
@@ -25,32 +25,28 @@ export const AccessAcceptedEmail = ({
   return (
     <BaseEmail
       preview={`${contactName} accepted your invitation`}
-      heading="Invitation Accepted"
+      heading="Good news — your invitation was accepted"
     >
       <Text style={paragraph}>Hi {ownerFirstName},</Text>
       <Text style={paragraph}>
-        {contactName} has accepted your invitation to access your Legacy Made
-        plan.
+        {contactName} has accepted your invitation and {accessDescription}.
       </Text>
       <Text style={paragraph}>
-        <strong>Access level:</strong> {accessLevel.replace(/_/g, ' ')}
+        <strong style={{ color: '#1A1A1A' }}>Access level:</strong>{' '}
+        {accessLevel.replace(/_/g, ' ')}
       </Text>
-      <Text style={paragraph}>
-        {contactName} {accessDescription}.
-      </Text>
-      <Text style={paragraph}>
-        <em>Accepted on {acceptedAt.toLocaleDateString()}</em>
+      <Text style={secondaryText}>
+        Accepted on {acceptedAt.toLocaleDateString()}
       </Text>
     </BaseEmail>
   );
 };
 
-const paragraph = {
-  color: '#525f7f',
-  fontSize: '16px',
-  lineHeight: '24px',
-  textAlign: 'left' as const,
-  marginBottom: '16px',
-};
+AccessAcceptedEmail.PreviewProps = {
+  ownerFirstName: 'Michael',
+  contactName: 'Sarah Thompson',
+  accessLevel: 'full_view',
+  acceptedAt: new Date('2026-02-25T14:30:00Z'),
+} satisfies AccessAcceptedEmailProps;
 
 export default AccessAcceptedEmail;

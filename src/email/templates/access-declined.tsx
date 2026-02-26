@@ -1,6 +1,6 @@
 import { Text } from '@react-email/components';
 import * as React from 'react';
-import { BaseEmail } from './base';
+import { BaseEmail, paragraph, secondaryText } from './base';
 
 interface AccessDeclinedEmailProps {
   ownerFirstName: string;
@@ -16,30 +16,28 @@ export const AccessDeclinedEmail = ({
   return (
     <BaseEmail
       preview={`${contactName} declined your invitation`}
-      heading="Invitation Declined"
+      heading="Your invitation was declined"
     >
       <Text style={paragraph}>Hi {ownerFirstName},</Text>
       <Text style={paragraph}>
         {contactName} has declined your invitation to access your Legacy Made
-        plan.
+        plan. Everyone has their own comfort level, and that's okay.
       </Text>
       <Text style={paragraph}>
-        You may want to reach out to them directly to understand their decision
-        or to send a new invitation at a later time.
+        If you'd like, you can always reach out to them directly or send a new
+        invitation later.
       </Text>
-      <Text style={paragraph}>
-        <em>Declined on {declinedAt.toLocaleDateString()}</em>
+      <Text style={secondaryText}>
+        Declined on {declinedAt.toLocaleDateString()}
       </Text>
     </BaseEmail>
   );
 };
 
-const paragraph = {
-  color: '#525f7f',
-  fontSize: '16px',
-  lineHeight: '24px',
-  textAlign: 'left' as const,
-  marginBottom: '16px',
-};
+AccessDeclinedEmail.PreviewProps = {
+  ownerFirstName: 'Michael',
+  contactName: 'Sarah Thompson',
+  declinedAt: new Date('2026-02-25T14:30:00Z'),
+} satisfies AccessDeclinedEmailProps;
 
 export default AccessDeclinedEmail;
