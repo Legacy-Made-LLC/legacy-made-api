@@ -6,7 +6,7 @@ import { EmailService } from '../email/email.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import { AccessLevel } from '../lib/types/cls';
 import { getPermissionsForAccessLevel } from '../plan-access/plan-permissions';
-import { plans, trustedContacts, type TrustedContact, users } from '../schema';
+import { plans, trustedContacts, users, type TrustedContact } from '../schema';
 
 @Injectable()
 export class SharedPlansService {
