@@ -210,6 +210,7 @@ export class EntriesService {
       title: entry.title,
       notes: entry.notes,
       sortOrder: entry.sortOrder,
+      completionStatus: entry.completionStatus,
       metadata: entry.metadata as Record<string, unknown>,
       metadataSchema: entry.metadataSchema as MetadataSchema | null,
       files,

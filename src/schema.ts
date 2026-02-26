@@ -255,6 +255,9 @@ export const entries = pgTable(
     notes: text('notes'), // General notes (optional)
     sortOrder: integer('sort_order').default(0).notNull(),
 
+    // Completion status (e.g., "draft", "pending", "complete") - frontend-controlled
+    completionStatus: text('completion_status'),
+
     // Category-specific data
     metadata: jsonb('metadata').default({}).notNull(),
     metadataSchema: jsonb('metadata_schema'),

@@ -16,6 +16,7 @@ export const createEntrySchema = z.object({
   title: z.string().min(1).nullish(),
   notes: z.string().optional().nullable(),
   sortOrder: z.number().int().optional().default(0),
+  completionStatus: z.string().optional().nullable(),
   metadata: z.record(z.string(), z.unknown()).default({}),
   metadataSchema: metadataSchemaSchema.optional().nullable(),
 }) satisfies ZodType<Omit<NewEntry, 'planId'>>;
