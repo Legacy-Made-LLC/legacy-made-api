@@ -7,11 +7,15 @@ import {
 } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { ActivityLogService } from '../activity-log/activity-log.service';
-import { DbService } from '../db/db.service';
+import { DbService, DrizzleTransaction } from '../db/db.service';
 import { EmailService } from '../email/email.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import { plans, trustedContacts, users, type TrustedContact } from '../schema';
-import { InvitationTokenService } from '../trusted-contacts/invitation-token.service';
+import {
+  InvitationTokenPayload,
+  InvitationTokenService,
+} from '../trusted-contacts/invitation-token.service';
+import { InvitationActionsService } from './invitation-actions.service';
 
 export interface InvitationDetails {
   id: string;
@@ -35,6 +39,7 @@ export class AccessInvitationsService {
     private readonly emailService: EmailService,
     private readonly invitationTokenService: InvitationTokenService,
     private readonly activityLog: ActivityLogService,
+    private readonly invitationActions: InvitationActionsService,
   ) {}
 
   /**
@@ -90,6 +95,11 @@ export class AccessInvitationsService {
   /**
    * Accept an invitation (authenticated endpoint)
    * Links the trusted contact to the current user's Clerk ID
+   *
+   * NOTE: We intentionally do NOT verify that the accepting user's email
+   * matches the invitation email. This allows a user to accept with a
+   * different sign-in email than the one the plan owner invited, avoiding
+   * confusion about mismatched emails.
    */
   async acceptInvitation(
     token: string,
@@ -99,84 +109,15 @@ export class AccessInvitationsService {
     const payload = this.invitationTokenService.verifyToken(token);
 
     return this.db.bypassRls(async (tx) => {
-      // Get the trusted contact
-      const [trustedContact] = await tx
-        .select()
-        .from(trustedContacts)
-        .where(eq(trustedContacts.id, payload.trustedContactId));
-
-      if (!trustedContact) {
-        throw new NotFoundException('Invitation not found');
-      }
-
-      // Verify email matches
-      if (trustedContact.email !== payload.email) {
-        throw new UnauthorizedException('Invalid invitation token');
-      }
-
-      // Check status
-      if (trustedContact.accessStatus !== 'pending') {
-        throw new BadRequestException(
-          `Invitation already ${trustedContact.accessStatus}`,
-        );
-      }
-
-      // Update the trusted contact
-      const [updated] = await tx
-        .update(trustedContacts)
-        .set({
-          accessStatus: 'accepted',
-          acceptedAt: new Date(),
-          clerkUserId: currentUserId,
-        })
-        .where(eq(trustedContacts.id, payload.trustedContactId))
-        .returning();
-
-      await this.activityLog.log(tx, {
-        planId: trustedContact.planId,
-        action: 'updated',
-        resourceType: 'trusted_contact',
-        resourceId: trustedContact.id,
-        details: { statusChange: 'accepted' },
-      });
-
-      this.logger.log(
-        `Invitation accepted for trusted contact ${payload.trustedContactId}`,
+      const trustedContact = await this.findAndValidatePendingContact(
+        tx,
+        payload,
       );
-
-      // Notify plan owner if we have their email
-      const [owner] = await tx
-        .select({
-          email: users.email,
-          firstName: users.firstName,
-        })
-        .from(plans)
-        .innerJoin(users, eq(plans.userId, users.id))
-        .where(eq(plans.id, trustedContact.planId));
-
-      if (owner?.email) {
-        try {
-          const contactName =
-            `${trustedContact.firstName} ${trustedContact.lastName}`.trim();
-          await this.emailService.sendAccessAccepted({
-            to: owner.email,
-            ownerFirstName: owner.firstName ?? 'there',
-            contactName,
-            accessLevel: trustedContact.accessLevel,
-            acceptedAt: new Date(),
-          });
-        } catch (error) {
-          this.logger.error(
-            'Failed to send owner acceptance notification',
-            error,
-          );
-        }
-      }
-
-      // Exclude owner's private notes from response to trusted contact
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { notes: _notes, ...withoutNotes } = updated;
-      return withoutNotes;
+      return this.invitationActions.performAccept(
+        tx,
+        trustedContact,
+        currentUserId,
+      );
     });
   }
 
@@ -187,70 +128,11 @@ export class AccessInvitationsService {
     const payload = this.invitationTokenService.verifyToken(token);
 
     return this.db.bypassRls(async (tx) => {
-      const [trustedContact] = await tx
-        .select()
-        .from(trustedContacts)
-        .where(eq(trustedContacts.id, payload.trustedContactId));
-
-      if (!trustedContact) {
-        throw new NotFoundException('Invitation not found');
-      }
-
-      if (trustedContact.email !== payload.email) {
-        throw new UnauthorizedException('Invalid invitation token');
-      }
-
-      if (trustedContact.accessStatus !== 'pending') {
-        throw new BadRequestException(
-          `Cannot decline - invitation is already ${trustedContact.accessStatus}`,
-        );
-      }
-
-      // Update status
-      await tx
-        .update(trustedContacts)
-        .set({
-          accessStatus: 'declined',
-          declinedAt: new Date(),
-        })
-        .where(eq(trustedContacts.id, payload.trustedContactId));
-
-      await this.activityLog.log(tx, {
-        planId: trustedContact.planId,
-        action: 'updated',
-        resourceType: 'trusted_contact',
-        resourceId: trustedContact.id,
-        details: { statusChange: 'declined' },
-      });
-
-      this.logger.log(
-        `Invitation declined for trusted contact ${payload.trustedContactId}`,
+      const trustedContact = await this.findAndValidatePendingContact(
+        tx,
+        payload,
       );
-
-      // Notify plan owner if we have their email
-      const [owner] = await tx
-        .select({
-          email: users.email,
-          firstName: users.firstName,
-        })
-        .from(plans)
-        .innerJoin(users, eq(plans.userId, users.id))
-        .where(eq(plans.id, trustedContact.planId));
-
-      if (owner?.email) {
-        try {
-          const contactName =
-            `${trustedContact.firstName} ${trustedContact.lastName}`.trim();
-          await this.emailService.sendAccessDeclined({
-            to: owner.email,
-            ownerFirstName: owner.firstName ?? 'there',
-            contactName,
-            declinedAt: new Date(),
-          });
-        } catch (error) {
-          this.logger.error('Failed to send owner decline notification', error);
-        }
-      }
+      return this.invitationActions.performDecline(tx, trustedContact);
     });
   }
 
@@ -328,5 +210,34 @@ export class AccessInvitationsService {
         }
       }
     });
+  }
+
+  /**
+   * Look up a trusted contact by token payload and validate it is pending.
+   */
+  private async findAndValidatePendingContact(
+    tx: DrizzleTransaction,
+    payload: InvitationTokenPayload,
+  ): Promise<TrustedContact> {
+    const [trustedContact] = await tx
+      .select()
+      .from(trustedContacts)
+      .where(eq(trustedContacts.id, payload.trustedContactId));
+
+    if (!trustedContact) {
+      throw new NotFoundException('Invitation not found');
+    }
+
+    if (trustedContact.email !== payload.email) {
+      throw new UnauthorizedException('Invalid invitation token');
+    }
+
+    if (trustedContact.accessStatus !== 'pending') {
+      throw new BadRequestException(
+        `Invitation already ${trustedContact.accessStatus}`,
+      );
+    }
+
+    return trustedContact;
   }
 }

@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ActivityLogService } from '../activity-log/activity-log.service';
+import { InvitationActionsService } from '../access-invitations/invitation-actions.service';
 import { DbService } from '../db/db.service';
-import { EmailService } from '../email/email.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import { SharedPlansService } from './shared-plans.service';
 
@@ -18,6 +17,11 @@ describe('SharedPlansService', () => {
     requireUserId: jest.fn(),
   };
 
+  const mockInvitationActionsService = {
+    performAccept: jest.fn(),
+    performDecline: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -31,15 +35,8 @@ describe('SharedPlansService', () => {
           useValue: mockClsService,
         },
         {
-          provide: ActivityLogService,
-          useValue: { log: jest.fn() },
-        },
-        {
-          provide: EmailService,
-          useValue: {
-            sendAccessAccepted: jest.fn(),
-            sendAccessDeclined: jest.fn(),
-          },
+          provide: InvitationActionsService,
+          useValue: mockInvitationActionsService,
         },
       ],
     }).compile();

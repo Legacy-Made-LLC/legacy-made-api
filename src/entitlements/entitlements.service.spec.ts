@@ -730,9 +730,7 @@ describe('EntitlementsService', () => {
     });
 
     it('should return without throwing when no checks specified', async () => {
-      await expect(
-        service.checkGuardEntitlements({}),
-      ).resolves.toBeUndefined();
+      await expect(service.checkGuardEntitlements({})).resolves.toBeUndefined();
 
       // Should not open any transaction
       expect(mockDbService.rls).not.toHaveBeenCalled();

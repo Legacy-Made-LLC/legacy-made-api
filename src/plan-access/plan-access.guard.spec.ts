@@ -71,7 +71,10 @@ describe('PlanAccessGuard', () => {
   });
 
   it('should allow access for plan owners', async () => {
-    mockPlanAccessService.getPlanAccess.mockResolvedValue({ role: 'owner', ownerId: 'owner-user-id' });
+    mockPlanAccessService.getPlanAccess.mockResolvedValue({
+      role: 'owner',
+      ownerId: 'owner-user-id',
+    });
 
     const context = createMockExecutionContext('some-plan-id');
     const result = await guard.canActivate(context);

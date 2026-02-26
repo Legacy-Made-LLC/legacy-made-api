@@ -553,10 +553,10 @@ export const planActivityLog = pgTable(
     ),
     shouldBypassRlsPolicy(),
     // Only plan owners can read activity logs
-    crudPolicy({
-      role: 'public',
-      read: userOwnsPlan(table.planId),
-      modify: false,
+    pgPolicy('plan_activity_log_select', {
+      for: 'select',
+      to: 'public',
+      using: userOwnsPlan(table.planId),
     }),
     // Both owners and trusted contacts can insert log entries
     pgPolicy('plan_activity_log_insert', {

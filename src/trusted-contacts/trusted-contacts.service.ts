@@ -9,6 +9,7 @@ import { ActivityLogService } from '../activity-log/activity-log.service';
 import { ApiConfigService } from '../config/api-config.service';
 import { DbService } from '../db/db.service';
 import { EmailService } from '../email/email.service';
+import { AccessLevel } from '../lib/types/cls';
 import { trustedContacts, users, plans, type TrustedContact } from '../schema';
 import { CreateTrustedContactDto } from './dto/create-trusted-contact.dto';
 import { UpdateTrustedContactDto } from './dto/update-trusted-contact.dto';
@@ -38,15 +39,58 @@ export class TrustedContactsService {
     dto: CreateTrustedContactDto,
   ): Promise<TrustedContact> {
     return this.db.rls(async (tx) => {
-      // Insert the trusted contact
-      const [trustedContact] = await tx
-        .insert(trustedContacts)
-        .values({
-          planId,
-          ...dto,
-          accessStatus: 'pending',
-        })
-        .returning();
+      // Check if a trusted contact with this email already exists for this plan
+      const [existing] = await tx
+        .select()
+        .from(trustedContacts)
+        .where(
+          and(
+            eq(trustedContacts.planId, planId),
+            eq(trustedContacts.email, dto.email),
+          ),
+        );
+
+      let trustedContact: TrustedContact;
+
+      if (existing) {
+        // If already pending or accepted, reject
+        if (
+          existing.accessStatus === 'pending' ||
+          existing.accessStatus === 'accepted'
+        ) {
+          throw new BadRequestException(
+            `A trusted contact with this email already exists (status: ${existing.accessStatus})`,
+          );
+        }
+
+        // Re-invite: update the existing record with new values, reset status
+        const [updated] = await tx
+          .update(trustedContacts)
+          .set({
+            ...dto,
+            accessStatus: 'pending',
+            clerkUserId: null,
+            acceptedAt: null,
+            declinedAt: null,
+            revokedAt: null,
+          })
+          .where(eq(trustedContacts.id, existing.id))
+          .returning();
+
+        trustedContact = updated;
+      } else {
+        // Insert new trusted contact
+        const [inserted] = await tx
+          .insert(trustedContacts)
+          .values({
+            planId,
+            ...dto,
+            accessStatus: 'pending',
+          })
+          .returning();
+
+        trustedContact = inserted;
+      }
 
       // Get plan owner information for the email
       const [plan] = await tx
@@ -79,10 +123,7 @@ export class TrustedContactsService {
           to: trustedContact.email,
           contactFirstName: trustedContact.firstName,
           ownerName,
-          accessLevel: trustedContact.accessLevel as
-            | 'full_edit'
-            | 'full_view'
-            | 'limited_view',
+          accessLevel: trustedContact.accessLevel as AccessLevel,
           accessTiming: trustedContact.accessTiming as
             | 'immediate'
             | 'upon_passing',
@@ -102,9 +143,12 @@ export class TrustedContactsService {
 
       await this.activityLog.log(tx, {
         planId,
-        action: 'created',
+        action: existing ? 'updated' : 'created',
         resourceType: 'trusted_contact',
         resourceId: trustedContact.id,
+        details: existing
+          ? { statusChange: 'pending', reinvited: true }
+          : undefined,
       });
 
       return trustedContact;
@@ -179,29 +223,38 @@ export class TrustedContactsService {
   }
 
   /**
-   * Revoke access (delete trusted contact)
+   * Revoke access (soft delete - sets status to revoked_by_owner)
    */
   async remove(id: string, planId: string): Promise<void> {
     return this.db.rls(async (tx) => {
-      const result = await tx
-        .delete(trustedContacts)
+      const [trustedContact] = await tx
+        .select()
+        .from(trustedContacts)
         .where(
           and(eq(trustedContacts.id, id), eq(trustedContacts.planId, planId)),
-        )
-        .returning();
+        );
 
-      if (!result.length) {
+      if (!trustedContact) {
         throw new NotFoundException('Trusted contact not found');
       }
 
+      await tx
+        .update(trustedContacts)
+        .set({
+          accessStatus: 'revoked_by_owner',
+          revokedAt: new Date(),
+        })
+        .where(eq(trustedContacts.id, id));
+
       await this.activityLog.log(tx, {
         planId,
-        action: 'deleted',
+        action: 'updated',
         resourceType: 'trusted_contact',
         resourceId: id,
+        details: { statusChange: 'revoked_by_owner' },
       });
 
-      this.logger.log(`Removed trusted contact ${id} from plan ${planId}`);
+      this.logger.log(`Revoked trusted contact ${id} from plan ${planId}`);
     });
   }
 
@@ -258,10 +311,7 @@ export class TrustedContactsService {
         to: trustedContact.email,
         contactFirstName: trustedContact.firstName,
         ownerName,
-        accessLevel: trustedContact.accessLevel as
-          | 'full_edit'
-          | 'full_view'
-          | 'limited_view',
+        accessLevel: trustedContact.accessLevel as AccessLevel,
         accessTiming: trustedContact.accessTiming as
           | 'immediate'
           | 'upon_passing',

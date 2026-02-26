@@ -5,6 +5,7 @@ import { EmailService } from '../email/email.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import { InvitationTokenService } from '../trusted-contacts/invitation-token.service';
 import { AccessInvitationsService } from './access-invitations.service';
+import { InvitationActionsService } from './invitation-actions.service';
 
 describe('AccessInvitationsService', () => {
   let service: AccessInvitationsService;
@@ -24,6 +25,11 @@ describe('AccessInvitationsService', () => {
   const mockInvitationTokenService = {
     generateToken: jest.fn(() => 'mock-token'),
     verifyToken: jest.fn(),
+  };
+
+  const mockInvitationActionsService = {
+    performAccept: jest.fn(),
+    performDecline: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -49,6 +55,10 @@ describe('AccessInvitationsService', () => {
         {
           provide: ActivityLogService,
           useValue: { log: jest.fn() },
+        },
+        {
+          provide: InvitationActionsService,
+          useValue: mockInvitationActionsService,
         },
       ],
     }).compile();

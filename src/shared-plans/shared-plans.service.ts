@@ -1,22 +1,18 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq, or } from 'drizzle-orm';
-import { ActivityLogService } from '../activity-log/activity-log.service';
+import { InvitationActionsService } from '../access-invitations/invitation-actions.service';
 import { DbService } from '../db/db.service';
-import { EmailService } from '../email/email.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import { AccessLevel } from '../lib/types/cls';
 import { getPermissionsForAccessLevel } from '../plan-access/plan-permissions';
-import { plans, trustedContacts, users, type TrustedContact } from '../schema';
+import { plans, trustedContacts, users } from '../schema';
 
 @Injectable()
 export class SharedPlansService {
-  private readonly logger = new Logger(SharedPlansService.name);
-
   constructor(
     private readonly db: DbService,
     private readonly cls: ApiClsService,
-    private readonly activityLog: ActivityLogService,
-    private readonly emailService: EmailService,
+    private readonly invitationActions: InvitationActionsService,
   ) {}
 
   /**
@@ -157,22 +153,7 @@ export class SharedPlansService {
         planId,
         userId,
       );
-
-      const [updated] = await tx
-        .update(trustedContacts)
-        .set({
-          accessStatus: 'accepted',
-          acceptedAt: new Date(),
-          clerkUserId: userId,
-        })
-        .where(eq(trustedContacts.id, trustedContact.id))
-        .returning();
-
-      await this.logAndNotifyOwner(tx, trustedContact, 'accepted');
-
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { notes: _notes, ...withoutNotes } = updated;
-      return withoutNotes;
+      return this.invitationActions.performAccept(tx, trustedContact, userId);
     });
   }
 
@@ -189,69 +170,8 @@ export class SharedPlansService {
         planId,
         userId,
       );
-
-      await tx
-        .update(trustedContacts)
-        .set({
-          accessStatus: 'declined',
-          declinedAt: new Date(),
-        })
-        .where(eq(trustedContacts.id, trustedContact.id));
-
-      await this.logAndNotifyOwner(tx, trustedContact, 'declined');
+      return this.invitationActions.performDecline(tx, trustedContact);
     });
-  }
-
-  private async logAndNotifyOwner(
-    tx: Parameters<Parameters<DbService['bypassRls']>[0]>[0],
-    trustedContact: TrustedContact,
-    statusChange: 'accepted' | 'declined',
-  ) {
-    await this.activityLog.log(tx, {
-      planId: trustedContact.planId,
-      action: 'updated',
-      resourceType: 'trusted_contact',
-      resourceId: trustedContact.id,
-      details: { statusChange },
-    });
-
-    this.logger.log(
-      `Invitation ${statusChange} for trusted contact ${trustedContact.id} via shared-plans`,
-    );
-
-    const [owner] = await tx
-      .select({ email: users.email, firstName: users.firstName })
-      .from(plans)
-      .innerJoin(users, eq(plans.userId, users.id))
-      .where(eq(plans.id, trustedContact.planId));
-
-    if (owner?.email) {
-      const contactName =
-        `${trustedContact.firstName} ${trustedContact.lastName}`.trim();
-      try {
-        if (statusChange === 'accepted') {
-          await this.emailService.sendAccessAccepted({
-            to: owner.email,
-            ownerFirstName: owner.firstName ?? 'there',
-            contactName,
-            accessLevel: trustedContact.accessLevel,
-            acceptedAt: new Date(),
-          });
-        } else {
-          await this.emailService.sendAccessDeclined({
-            to: owner.email,
-            ownerFirstName: owner.firstName ?? 'there',
-            contactName,
-            declinedAt: new Date(),
-          });
-        }
-      } catch (error) {
-        this.logger.error(
-          `Failed to send owner ${statusChange} notification`,
-          error,
-        );
-      }
-    }
   }
 
   /**

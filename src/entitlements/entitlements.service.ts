@@ -2,7 +2,15 @@ import { Injectable } from '@nestjs/common';
 import { count, eq, sum } from 'drizzle-orm';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiClsService } from '../lib/api-cls.service';
-import { entries, files, plans, subscriptions, wishes } from '../schema';
+import {
+  entries,
+  files,
+  messages,
+  plans,
+  subscriptions,
+  trustedContacts,
+  wishes,
+} from '../schema';
 import {
   NON_EXPIRING_TIERS,
   PILLAR_DISPLAY_NAMES,
@@ -356,17 +364,27 @@ export class EntitlementsService {
         return result?.count ?? 0;
       }
 
-      case 'trusted_contacts':
-        // TODO: Implement when trusted_contacts table exists
-        return 0;
+      case 'trusted_contacts': {
+        const [tcResult] = await tx
+          .select({ count: count() })
+          .from(trustedContacts)
+          .innerJoin(plans, eq(trustedContacts.planId, plans.id))
+          .where(eq(plans.userId, userId));
+        return tcResult?.count ?? 0;
+      }
 
       case 'family_profiles':
         // TODO: Implement when family_profiles table exists
         return 0;
 
-      case 'legacy_messages':
-        // TODO: Implement when messages table exists
-        return 0;
+      case 'legacy_messages': {
+        const [msgResult] = await tx
+          .select({ count: count() })
+          .from(messages)
+          .innerJoin(plans, eq(messages.planId, plans.id))
+          .where(eq(plans.userId, userId));
+        return msgResult?.count ?? 0;
+      }
 
       case 'storage_mb': {
         const [entryFilesResult] = await tx

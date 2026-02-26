@@ -17,6 +17,8 @@ describe('FilesService', () => {
   const mockFile = {
     id: 'file-123',
     entryId: 'entry-456',
+    wishId: null,
+    messageId: null,
     filename: 'test.pdf',
     mimeType: 'application/pdf',
     sizeBytes: 1024,

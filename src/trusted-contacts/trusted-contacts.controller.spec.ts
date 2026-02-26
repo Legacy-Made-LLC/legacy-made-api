@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { TrustedContactsController } from './trusted-contacts.controller';
 import { TrustedContactsService } from './trusted-contacts.service';
 
@@ -16,6 +17,12 @@ describe('TrustedContactsController', () => {
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
+      imports: [
+        ThrottlerModule.forRoot([
+          { name: 'short', ttl: 1000, limit: 3 },
+          { name: 'medium', ttl: 60000, limit: 20 },
+        ]),
+      ],
       controllers: [TrustedContactsController],
       providers: [
         {

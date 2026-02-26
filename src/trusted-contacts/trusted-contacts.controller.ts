@@ -9,7 +9,9 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  UseGuards,
 } from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { CreateTrustedContactDto } from './dto/create-trusted-contact.dto';
 import { UpdateTrustedContactDto } from './dto/update-trusted-contact.dto';
 import { TrustedContactsService } from './trusted-contacts.service';
@@ -65,6 +67,11 @@ export class TrustedContactsController {
 
   @Post(':id/resend-invitation')
   @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    short: { limit: 1, ttl: 10000 },
+    medium: { limit: 5, ttl: 60000 },
+  })
   resendInvitation(
     @Param('planId', ParseUUIDPipe) planId: string,
     @Param('id', ParseUUIDPipe) id: string,

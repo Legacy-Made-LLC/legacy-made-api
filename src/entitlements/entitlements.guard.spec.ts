@@ -61,13 +61,13 @@ describe('EntitlementsGuard', () => {
     const result = await guard.canActivate(context);
 
     expect(result).toBe(true);
-    expect(
-      mockEntitlementsService.checkGuardEntitlements,
-    ).toHaveBeenCalledWith({
-      pillar: undefined,
-      viewPillar: undefined,
-      quota: undefined,
-    });
+    expect(mockEntitlementsService.checkGuardEntitlements).toHaveBeenCalledWith(
+      {
+        pillar: undefined,
+        viewPillar: undefined,
+        quota: undefined,
+      },
+    );
   });
 
   it('should pass pillar metadata to checkGuardEntitlements', async () => {
@@ -79,13 +79,13 @@ describe('EntitlementsGuard', () => {
     const context = createMockExecutionContext();
     await guard.canActivate(context);
 
-    expect(
-      mockEntitlementsService.checkGuardEntitlements,
-    ).toHaveBeenCalledWith({
-      pillar: 'important_info',
-      viewPillar: undefined,
-      quota: undefined,
-    });
+    expect(mockEntitlementsService.checkGuardEntitlements).toHaveBeenCalledWith(
+      {
+        pillar: 'important_info',
+        viewPillar: undefined,
+        quota: undefined,
+      },
+    );
   });
 
   it('should pass view pillar metadata to checkGuardEntitlements', async () => {
@@ -97,13 +97,13 @@ describe('EntitlementsGuard', () => {
     const context = createMockExecutionContext();
     await guard.canActivate(context);
 
-    expect(
-      mockEntitlementsService.checkGuardEntitlements,
-    ).toHaveBeenCalledWith({
-      pillar: undefined,
-      viewPillar: 'messages',
-      quota: undefined,
-    });
+    expect(mockEntitlementsService.checkGuardEntitlements).toHaveBeenCalledWith(
+      {
+        pillar: undefined,
+        viewPillar: 'messages',
+        quota: undefined,
+      },
+    );
   });
 
   it('should pass quota metadata to checkGuardEntitlements', async () => {
@@ -115,13 +115,13 @@ describe('EntitlementsGuard', () => {
     const context = createMockExecutionContext();
     await guard.canActivate(context);
 
-    expect(
-      mockEntitlementsService.checkGuardEntitlements,
-    ).toHaveBeenCalledWith({
-      pillar: undefined,
-      viewPillar: undefined,
-      quota: 'entries',
-    });
+    expect(mockEntitlementsService.checkGuardEntitlements).toHaveBeenCalledWith(
+      {
+        pillar: undefined,
+        viewPillar: undefined,
+        quota: 'entries',
+      },
+    );
   });
 
   it('should pass combined metadata to checkGuardEntitlements', async () => {
@@ -135,13 +135,13 @@ describe('EntitlementsGuard', () => {
     const context = createMockExecutionContext();
     await guard.canActivate(context);
 
-    expect(
-      mockEntitlementsService.checkGuardEntitlements,
-    ).toHaveBeenCalledWith({
-      pillar: 'important_info',
-      viewPillar: 'messages',
-      quota: 'entries',
-    });
+    expect(mockEntitlementsService.checkGuardEntitlements).toHaveBeenCalledWith(
+      {
+        pillar: 'important_info',
+        viewPillar: 'messages',
+        quota: 'entries',
+      },
+    );
   });
 
   it('should propagate EntitlementException from service', async () => {

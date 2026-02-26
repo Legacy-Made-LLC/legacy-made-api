@@ -3,6 +3,7 @@ import {
   ExecutionContext,
   ForbiddenException,
   Injectable,
+  Logger,
   SetMetadata,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -46,6 +47,8 @@ export const RequiresAccessLevel = (level: AccessLevel) =>
  */
 @Injectable()
 export class PlanAccessGuard implements CanActivate {
+  private readonly logger = new Logger(PlanAccessGuard.name);
+
   constructor(
     private readonly planAccessService: PlanAccessService,
     private readonly reflector: Reflector,
@@ -58,6 +61,9 @@ export class PlanAccessGuard implements CanActivate {
 
     // If no planId in route, skip this guard (let other guards handle it)
     if (!planId) {
+      this.logger.warn(
+        `PlanAccessGuard applied to route without planId: ${request.method} ${request.path}`,
+      );
       return true;
     }
 
