@@ -560,18 +560,43 @@ export class EntitlementsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * Get full entitlement info for the current user.
-   * Useful for displaying in the UI.
+   * Get full entitlement info for the current context.
+   *
+   * When planOwnerId is set in CLS (trusted contact viewing a shared plan),
+   * returns the plan OWNER's entitlements via bypassRls. Otherwise returns
+   * the current user's entitlements.
    */
   async getEntitlementInfo(): Promise<EntitlementInfo> {
-    return this.db.rls(async (tx) => {
-      const tier = await this.getTierInTx(tx);
+    const userId = this.getEntitlementUserId();
+
+    const buildInfo = async (
+      tx: DrizzleTransaction,
+    ): Promise<EntitlementInfo> => {
+      const [subscription] = await tx
+        .select({
+          tier: subscriptions.tier,
+          currentPeriodEnd: subscriptions.currentPeriodEnd,
+        })
+        .from(subscriptions)
+        .where(eq(subscriptions.userId, userId));
+
+      let tier: SubscriptionTier = 'free';
+      if (subscription) {
+        const rawTier = subscription.tier as SubscriptionTier;
+        tier = this.isSubscriptionExpired(
+          rawTier,
+          subscription.currentPeriodEnd,
+        )
+          ? 'free'
+          : rawTier;
+      }
+
       const config = TIER_CONFIG[tier];
 
       const quotas = await Promise.all(
         (Object.keys(config.quotas) as QuotaFeature[]).map(async (feature) => {
           const limit = config.quotas[feature];
-          const current = await this.getUsageInTx(tx, feature);
+          const current = await this.countUsageInTx(tx, userId, feature);
           return {
             feature,
             displayName: QUOTA_DISPLAY_NAMES[feature],
@@ -590,7 +615,12 @@ export class EntitlementsService {
         viewOnlyPillars: config.viewOnlyPillars,
         quotas,
       };
-    });
+    };
+
+    if (this.isCheckingPlanOwner()) {
+      return this.db.bypassRls(buildInfo);
+    }
+    return this.db.rls(buildInfo);
   }
 
   /**

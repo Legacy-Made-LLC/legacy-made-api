@@ -18,6 +18,7 @@ describe('PlanAccessGuard', () => {
       switchToHttp: () => ({
         getRequest: () => ({
           params: planId ? { planId } : {},
+          query: {},
         }),
       }),
       getHandler: jest.fn(),
@@ -77,9 +78,10 @@ describe('PlanAccessGuard', () => {
 
     expect(result).toBe(true);
     expect(mockClsService.set).toHaveBeenCalledWith('planAccessRole', 'owner');
-    expect(mockClsService.set).toHaveBeenCalledWith(
+    // planOwnerId should NOT be set for owners — they use normal RLS
+    expect(mockClsService.set).not.toHaveBeenCalledWith(
       'planOwnerId',
-      'owner-user-id',
+      expect.anything(),
     );
   });
 
@@ -102,6 +104,10 @@ describe('PlanAccessGuard', () => {
     expect(mockClsService.set).toHaveBeenCalledWith(
       'planAccessLevel',
       'full_view',
+    );
+    expect(mockClsService.set).toHaveBeenCalledWith(
+      'planOwnerId',
+      'owner-user-id',
     );
   });
 

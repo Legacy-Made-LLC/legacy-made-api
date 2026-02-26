@@ -6,6 +6,8 @@ import {
   SetMetadata,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { Request } from 'express';
+import { firstOf } from 'src/common/utils/helpers';
 import { ApiClsService } from '../lib/api-cls.service';
 import { AccessLevel } from '../lib/types/cls';
 import { PlanAccessService } from './plan-access.service';
@@ -51,8 +53,8 @@ export class PlanAccessGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest();
-    const planId = request.params?.planId;
+    const request = context.switchToHttp().getRequest<Request>();
+    const planId = firstOf(request.params?.planId ?? request.query?.planId);
 
     // If no planId in route, skip this guard (let other guards handle it)
     if (!planId) {
@@ -67,9 +69,15 @@ export class PlanAccessGuard implements CanActivate {
 
     // Store access context in CLS for downstream use
     this.cls.set('planAccessRole', access.role);
-    this.cls.set('planOwnerId', access.ownerId);
     if (access.accessLevel) {
       this.cls.set('planAccessLevel', access.accessLevel);
+    }
+
+    // For trusted contacts, store planOwnerId so downstream services
+    // (e.g. EntitlementsService) can check the owner's tier/quotas.
+    // Not set for owners — they use normal RLS with their own userId.
+    if (access.role === 'trusted_contact') {
+      this.cls.set('planOwnerId', access.ownerId);
     }
 
     // For trusted contacts, check the required access level
