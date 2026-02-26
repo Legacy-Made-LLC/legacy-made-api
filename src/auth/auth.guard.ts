@@ -8,9 +8,9 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import type { Request as ExpressRequest } from 'express';
 import { ApiClsService } from 'src/lib/api-cls.service';
 import { CLERK_CLIENT } from 'src/lib/clerk/client';
-import type { Request as ExpressRequest } from 'express';
 
 export const IS_PUBLIC_KEY = 'isPublic';
 export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);

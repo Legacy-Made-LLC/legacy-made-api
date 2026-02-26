@@ -115,6 +115,10 @@ export class InvitationActionsService {
           error,
         );
       }
+    } else {
+      this.logger.warn(
+        `Couldn't send ${statusChange} notification because plan owner has no email.`,
+      );
     }
   }
 }
