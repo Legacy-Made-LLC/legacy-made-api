@@ -1,11 +1,16 @@
 import { Text } from '@react-email/components';
 import * as React from 'react';
+import {
+  ACCESS_LEVEL_DESCRIPTIONS,
+  ACCESS_LEVEL_LABELS,
+} from '../../lib/access-level-labels';
+import { AccessLevel } from '../../lib/types/cls';
 import { BaseEmail, paragraph, secondaryText } from './base';
 
 interface AccessAcceptedEmailProps {
   ownerFirstName: string;
   contactName: string;
-  accessLevel: string;
+  accessLevel: AccessLevel;
   acceptedAt: Date;
 }
 
@@ -15,13 +20,6 @@ export const AccessAcceptedEmail = ({
   accessLevel,
   acceptedAt,
 }: AccessAcceptedEmailProps) => {
-  const accessDescription =
-    accessLevel === 'full_edit'
-      ? 'can now view and edit your plan'
-      : accessLevel === 'full_view'
-        ? 'can now view all information in your plan'
-        : 'can now view your wishes and messages';
-
   return (
     <BaseEmail
       preview={`${contactName} accepted your invitation`}
@@ -29,11 +27,12 @@ export const AccessAcceptedEmail = ({
     >
       <Text style={paragraph}>Hi {ownerFirstName},</Text>
       <Text style={paragraph}>
-        {contactName} has accepted your invitation and {accessDescription}.
+        {contactName} has accepted your invitation and{' '}
+        {ACCESS_LEVEL_DESCRIPTIONS[accessLevel]}.
       </Text>
       <Text style={paragraph}>
         <strong style={{ color: '#1A1A1A' }}>Access level:</strong>{' '}
-        {accessLevel.replace(/_/g, ' ')}
+        {ACCESS_LEVEL_LABELS[accessLevel]}
       </Text>
       <Text style={secondaryText}>
         Accepted on {acceptedAt.toLocaleDateString()}

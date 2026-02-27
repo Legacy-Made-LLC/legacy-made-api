@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { render } from '@react-email/components';
 import { Resend } from 'resend';
 import { ApiConfigService } from '../config/api-config.service';
+import { AccessLevel } from '../lib/types/cls';
 import { AccessAcceptedEmail } from './templates/access-accepted';
 import { AccessDeclinedEmail } from './templates/access-declined';
 import { AccessRevokedByContactEmail } from './templates/access-revoked-by-contact';
@@ -13,7 +14,7 @@ export interface SendInvitationEmailData {
   to: string;
   contactFirstName: string;
   ownerName: string;
-  accessLevel: 'full_edit' | 'full_view' | 'limited_view';
+  accessLevel: AccessLevel;
   accessTiming: 'immediate' | 'upon_passing';
   invitationUrl: string;
 }
@@ -22,7 +23,7 @@ export interface SendAccessAcceptedEmailData {
   to: string;
   ownerFirstName: string;
   contactName: string;
-  accessLevel: string;
+  accessLevel: AccessLevel;
   acceptedAt: Date;
 }
 

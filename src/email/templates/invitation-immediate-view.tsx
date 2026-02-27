@@ -1,11 +1,18 @@
 import { Button, Link, Text } from '@react-email/components';
-import * as React from 'react';
-import { BaseEmail, buttonPrimary, linkStyle, paragraph, secondaryText } from './base';
+import { ACCESS_LEVEL_INVITATION_DESCRIPTIONS } from '../../lib/access-level-labels';
+import { AccessLevel } from '../../lib/types/cls';
+import {
+  BaseEmail,
+  buttonPrimary,
+  linkStyle,
+  paragraph,
+  secondaryText,
+} from './base';
 
 interface InvitationImmediateViewEmailProps {
   contactFirstName: string;
   ownerName: string;
-  accessLevel: string;
+  accessLevel: Exclude<AccessLevel, 'full_edit'>;
   invitationUrl: string;
 }
 
@@ -15,10 +22,7 @@ export const InvitationImmediateViewEmail = ({
   accessLevel,
   invitationUrl,
 }: InvitationImmediateViewEmailProps) => {
-  const accessDescription =
-    accessLevel === 'full_view'
-      ? 'view all information in their legacy plan, including important entries, wishes, and messages'
-      : 'view wishes and personal messages';
+  const accessDescription = ACCESS_LEVEL_INVITATION_DESCRIPTIONS[accessLevel];
 
   return (
     <BaseEmail

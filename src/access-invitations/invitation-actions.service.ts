@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { DrizzleTransaction } from '../db/db.service';
 import { EmailService } from '../email/email.service';
+import { AccessLevel } from '../lib/types/cls';
 import { plans, trustedContacts, users, type TrustedContact } from '../schema';
 
 /**
@@ -98,7 +99,7 @@ export class InvitationActionsService {
             to: owner.email,
             ownerFirstName: owner.firstName ?? 'there',
             contactName,
-            accessLevel: trustedContact.accessLevel,
+            accessLevel: trustedContact.accessLevel as AccessLevel,
             acceptedAt: new Date(),
           });
         } else {
