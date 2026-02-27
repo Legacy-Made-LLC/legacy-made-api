@@ -53,7 +53,7 @@ export const InvitationUponPassingEmail = ({
 InvitationUponPassingEmail.PreviewProps = {
   contactFirstName: 'Sarah',
   ownerName: 'Michael Johnson',
-  invitationUrl: 'https://app.legacymade.com/invitations/abc123xyz456',
+  invitationUrl: 'https://app.mylegacymade.com/invitations/abc123xyz456',
 } satisfies InvitationUponPassingEmailProps;
 
 export default InvitationUponPassingEmail;

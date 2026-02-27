@@ -140,7 +140,7 @@ All templates use professional styling with responsive design.
 - Audience: `legacy-made-invitation`
 
 **Invitation URL Format:**
-`https://app.legacymade.com/invitations/{token}`
+`https://app.mylegacymade.com/invitations/{token}`
 
 ---
 
@@ -492,7 +492,7 @@ nest build
 - [ ] Set `RESEND_FROM_EMAIL` (verified sender domain in Resend)
 - [ ] Set `RESEND_FROM_NAME=Legacy Made`
 - [ ] Generate secure `INVITATION_TOKEN_SECRET` (min 32 characters)
-- [ ] Update invitation URL in `TrustedContactsService` from `https://app.legacymade.com` to actual production domain
+- [ ] Update invitation URL in `TrustedContactsService` from `https://app.mylegacymade.com` to actual production domain
 
 ### Migration
 

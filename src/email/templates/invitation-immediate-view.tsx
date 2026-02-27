@@ -55,7 +55,7 @@ InvitationImmediateViewEmail.PreviewProps = {
   contactFirstName: 'Sarah',
   ownerName: 'Michael Johnson',
   accessLevel: 'full_view',
-  invitationUrl: 'https://app.legacymade.com/invitations/abc123xyz456',
+  invitationUrl: 'https://app.mylegacymade.com/invitations/abc123xyz456',
 } satisfies InvitationImmediateViewEmailProps;
 
 export default InvitationImmediateViewEmail;

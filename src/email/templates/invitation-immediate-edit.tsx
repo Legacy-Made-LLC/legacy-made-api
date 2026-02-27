@@ -48,7 +48,7 @@ export const InvitationImmediateEditEmail = ({
 InvitationImmediateEditEmail.PreviewProps = {
   contactFirstName: 'Sarah',
   ownerName: 'Michael Johnson',
-  invitationUrl: 'https://app.legacymade.com/invitations/abc123xyz456',
+  invitationUrl: 'https://app.mylegacymade.com/invitations/abc123xyz456',
 } satisfies InvitationImmediateEditEmailProps;
 
 export default InvitationImmediateEditEmail;
