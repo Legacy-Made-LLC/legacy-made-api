@@ -1,4 +1,5 @@
 import { Button, Link, Text } from '@react-email/components';
+import * as React from 'react';
 import { ACCESS_LEVEL_INVITATION_DESCRIPTIONS } from '../../lib/access-level-labels';
 import { AccessLevel } from '../../lib/types/cls';
 import {
