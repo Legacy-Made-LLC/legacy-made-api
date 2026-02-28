@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { ApiConfigService } from 'src/config/api-config.service';
 import { DbService } from 'src/db/db.service';
+import { EmailService } from 'src/email/email.service';
 import { SubscriptionTier } from 'src/entitlements';
 import { NewUser, subscriptions, users } from 'src/schema';
 
@@ -20,9 +21,12 @@ import { NewUser, subscriptions, users } from 'src/schema';
  */
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private readonly db: DbService,
     private readonly config: ApiConfigService,
+    private readonly email: EmailService,
   ) {}
 
   /**
@@ -59,13 +63,13 @@ export class UsersService {
    * Called by Clerk webhook on user.updated events.
    * Creates the user with a default subscription if they don't exist yet.
    */
-  async upsertUser(user: NewUser) {
-    return this.db.bypassRls(async (tx) => {
+  async upsertUser(data: NewUser) {
+    const user = await this.db.bypassRls(async (tx) => {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { id, createdAt, ...updateData } = user;
+      const { id, createdAt, ...updateData } = data;
       const [upserted] = await tx
         .insert(users)
-        .values(user)
+        .values(data)
         .onConflictDoUpdate({
           target: users.id,
           set: updateData,
@@ -81,6 +85,25 @@ export class UsersService {
 
       return upserted;
     });
+
+    if (user.email) {
+      try {
+        await this.email.updateSubscriberProperties({
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          userId: user.id,
+          signedUpAt: user.createdAt,
+        });
+      } catch (e) {
+        this.logger.error(
+          `Failed to set email subscriber properties after upserting user with email: ${user.email}`,
+          e,
+        );
+      }
+    }
+
+    return user;
   }
 
   /**

@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { UsersService } from './users.service';
 import { DbService } from 'src/db/db.service';
 import { ApiConfigService } from 'src/config/api-config.service';
+import { EmailService } from 'src/email/email.service';
 
 describe('UsersService', () => {
   let service: UsersService;
@@ -24,6 +25,12 @@ describe('UsersService', () => {
         {
           provide: ApiConfigService,
           useValue: mockConfigService,
+        },
+        {
+          provide: EmailService,
+          useValue: {
+            updateSubscriberProperties: jest.fn(),
+          },
         },
       ],
     }).compile();

@@ -12,6 +12,7 @@ describe('EmailService', () => {
         RESEND_FROM_EMAIL_INVITE: 'invite@notify.example.com',
         RESEND_FROM_EMAIL_UPDATES: 'updates@notify.example.com',
         RESEND_FROM_NAME: 'Test App',
+        LOOPS_API_KEY: 'test_loops_key',
       };
       return config[key];
     }),

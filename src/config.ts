@@ -42,6 +42,9 @@ export const configSchema = z.object({
     .default('updates@notify.mylegacymade.com'),
   RESEND_FROM_NAME: z.string().default('Legacy Made'),
 
+  // LOOPS (Marketing Email Service)
+  LOOPS_API_KEY: z.string(),
+
   // INVITATION TOKENS
   INVITATION_TOKEN_SECRET: z.string(),
   INVITATION_BASE_URL: z.url().default('https://app.mylegacymade.com'),

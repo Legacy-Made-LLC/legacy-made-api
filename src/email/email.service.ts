@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { render } from '@react-email/components';
+import { ContactProperties, LoopsClient } from 'loops';
 import { Resend } from 'resend';
 import { ApiConfigService } from '../config/api-config.service';
 import { AccessLevel } from '../lib/types/cls';
@@ -41,10 +42,19 @@ export interface SendAccessRevokedEmailData {
   revokedAt: Date;
 }
 
+export interface UpdateSubscriberPropertiesData {
+  email: string;
+  userId: string;
+  firstName: string | null;
+  lastName: string | null;
+  signedUpAt?: Date | null;
+}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private readonly resend: Resend;
+  private readonly loops: LoopsClient;
   private readonly fromInvite: string;
   private readonly fromUpdates: string;
 
@@ -53,6 +63,8 @@ export class EmailService {
     const name = this.config.get('RESEND_FROM_NAME');
     this.fromInvite = `${name} <${this.config.get('RESEND_FROM_EMAIL_INVITE')}>`;
     this.fromUpdates = `${name} <${this.config.get('RESEND_FROM_EMAIL_UPDATES')}>`;
+
+    this.loops = new LoopsClient(this.config.get('LOOPS_API_KEY'));
   }
 
   /**
@@ -201,5 +213,28 @@ export class EmailService {
       );
       throw error;
     }
+  }
+
+  async updateSubscriberProperties(data: UpdateSubscriberPropertiesData) {
+    const properties: ContactProperties = {
+      appUserId: data.userId,
+    };
+
+    if (data.signedUpAt) {
+      properties.appSignedUpAt = data.signedUpAt.toISOString();
+    }
+
+    if (data.firstName) {
+      properties.firstName = data.firstName;
+    }
+
+    if (data.lastName) {
+      properties.lastName = data.lastName;
+    }
+
+    await this.loops.updateContact({
+      email: data.email,
+      properties,
+    });
   }
 }
