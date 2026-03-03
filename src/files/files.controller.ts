@@ -178,6 +178,77 @@ export class FilesController {
   }
 
   // =========================================================================
+  // Message-scoped endpoints
+  // =========================================================================
+
+  /**
+   * Initiate a file upload to R2 for a message.
+   * POST /messages/:messageId/files/upload/init
+   *
+   * Rate limited: 3 requests/second, 20 requests/minute
+   *
+   * Quota enforcement happens at two levels:
+   * 1. Guard level (@RequiresQuota): Early rejection if user has zero quota
+   *    remaining (e.g., free tier or already at capacity).
+   * 2. Service level (requireFileSizeQuotaInTx): Precise check that the
+   *    specific file size fits within remaining quota.
+   */
+  @Post('messages/:messageId/files/upload/init')
+  @UseGuards(ThrottlerGuard, EntitlementsGuard)
+  @RequiresPillar('messages')
+  @RequiresQuota('storage_mb')
+  @Throttle({
+    short: { limit: 3, ttl: 1000 },
+    medium: { limit: 20, ttl: 60000 },
+  })
+  initiateMessageUpload(
+    @Param('messageId', ParseUUIDPipe) messageId: string,
+    @Body() dto: InitiateUploadDto,
+  ) {
+    return this.filesService.initiateUpload(
+      { type: 'message', id: messageId },
+      dto,
+    );
+  }
+
+  /**
+   * Initiate a video upload to Mux for a message.
+   * POST /messages/:messageId/files/video/init
+   *
+   * Rate limited: 3 requests/second, 20 requests/minute
+   *
+   * Quota enforcement: See initiateMessageUpload() for details.
+   */
+  @Post('messages/:messageId/files/video/init')
+  @UseGuards(ThrottlerGuard, EntitlementsGuard)
+  @RequiresPillar('messages')
+  @RequiresQuota('storage_mb')
+  @Throttle({
+    short: { limit: 3, ttl: 1000 },
+    medium: { limit: 20, ttl: 60000 },
+  })
+  initiateMessageVideoUpload(
+    @Param('messageId', ParseUUIDPipe) messageId: string,
+    @Body() dto: InitiateUploadDto,
+  ) {
+    return this.filesService.initiateVideoUpload(
+      { type: 'message', id: messageId },
+      dto,
+    );
+  }
+
+  /**
+   * List all files for a message.
+   * GET /messages/:messageId/files
+   */
+  @Get('messages/:messageId/files')
+  @UseGuards(EntitlementsGuard)
+  @RequiresViewPillar('messages')
+  findAllForMessage(@Param('messageId', ParseUUIDPipe) messageId: string) {
+    return this.filesService.findAllForMessage(messageId);
+  }
+
+  // =========================================================================
   // File-scoped endpoints
   // =========================================================================
 

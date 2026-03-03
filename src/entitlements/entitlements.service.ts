@@ -401,9 +401,17 @@ export class EntitlementsService {
           .innerJoin(plans, eq(wishes.planId, plans.id))
           .where(eq(plans.userId, userId));
 
+        const [messageFilesResult] = await tx
+          .select({ totalBytes: sum(files.sizeBytes) })
+          .from(files)
+          .innerJoin(messages, eq(files.messageId, messages.id))
+          .innerJoin(plans, eq(messages.planId, plans.id))
+          .where(eq(plans.userId, userId));
+
         const entryBytes = Number(entryFilesResult?.totalBytes ?? 0);
         const wishBytes = Number(wishFilesResult?.totalBytes ?? 0);
-        const totalBytes = entryBytes + wishBytes;
+        const messageBytes = Number(messageFilesResult?.totalBytes ?? 0);
+        const totalBytes = entryBytes + wishBytes + messageBytes;
         return Math.ceil(totalBytes / (1024 * 1024));
       }
 

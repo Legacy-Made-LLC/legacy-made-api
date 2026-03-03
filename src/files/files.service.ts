@@ -9,7 +9,7 @@ import { randomBytes } from 'crypto';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiConfigService } from '../config/api-config.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
-import { files, File, entries, wishes } from '../schema';
+import { files, File, entries, wishes, messages } from '../schema';
 import { R2Service } from './r2.service';
 import { MuxService } from './mux.service';
 import {
@@ -24,13 +24,14 @@ const PART_SIZE = 100 * 1024 * 1024;
 
 /**
  * Discriminated union for file parent reference.
- * Files can be attached to either an entry or a wish.
+ * Files can be attached to an entry, wish, or message.
  */
 export type FileParent =
   | { type: 'entry'; id: string }
-  | { type: 'wish'; id: string };
+  | { type: 'wish'; id: string }
+  | { type: 'message'; id: string };
 
-type PillarType = 'important_info' | 'wishes';
+type PillarType = 'important_info' | 'wishes' | 'messages';
 
 export interface UploadInitResult {
   fileId: string;
@@ -78,7 +79,7 @@ export class FilesService {
   ) {}
 
   /**
-   * Initiate an R2 file upload for an entry or wish.
+   * Initiate an R2 file upload for an entry, wish, or message.
    * Returns presigned URLs for direct upload to R2.
    */
   async initiateUpload(
@@ -107,6 +108,7 @@ export class FilesService {
         .values({
           entryId: parent.type === 'entry' ? parent.id : undefined,
           wishId: parent.type === 'wish' ? parent.id : undefined,
+          messageId: parent.type === 'message' ? parent.id : undefined,
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
@@ -162,7 +164,7 @@ export class FilesService {
   }
 
   /**
-   * Initiate a Mux video upload for an entry or wish.
+   * Initiate a Mux video upload for an entry, wish, or message.
    * Returns a direct upload URL for uploading video to Mux.
    */
   async initiateVideoUpload(
@@ -183,6 +185,7 @@ export class FilesService {
         .values({
           entryId: parent.type === 'entry' ? parent.id : undefined,
           wishId: parent.type === 'wish' ? parent.id : undefined,
+          messageId: parent.type === 'message' ? parent.id : undefined,
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
@@ -217,7 +220,7 @@ export class FilesService {
   }
 
   /**
-   * Verify that a parent (entry or wish) exists.
+   * Verify that a parent (entry, wish, or message) exists.
    * RLS will enforce ownership.
    */
   private async verifyParentExists(
@@ -233,7 +236,7 @@ export class FilesService {
       if (!entry) {
         throw new NotFoundException(`Entry with id ${parent.id} not found`);
       }
-    } else {
+    } else if (parent.type === 'wish') {
       const [wish] = await tx
         .select({ id: wishes.id })
         .from(wishes)
@@ -241,6 +244,15 @@ export class FilesService {
 
       if (!wish) {
         throw new NotFoundException(`Wish with id ${parent.id} not found`);
+      }
+    } else {
+      const [message] = await tx
+        .select({ id: messages.id })
+        .from(messages)
+        .where(eq(messages.id, parent.id));
+
+      if (!message) {
+        throw new NotFoundException(`Message with id ${parent.id} not found`);
       }
     }
   }
@@ -348,8 +360,33 @@ export class FilesService {
   }
 
   /**
+   * List files for a message.
+   */
+  async findAllForMessage(messageId: string): Promise<File[]> {
+    return this.db.rls(async (tx) => {
+      return tx.select().from(files).where(eq(files.messageId, messageId));
+    });
+  }
+
+  /**
+   * Find files for multiple messages (batch fetch).
+   * Used when including files in message list responses.
+   */
+  async findByMessageIds(messageIds: string[]): Promise<File[]> {
+    if (messageIds.length === 0) return [];
+
+    return this.db.rls(async (tx) => {
+      return tx
+        .select()
+        .from(files)
+        .where(inArray(files.messageId, messageIds))
+        .orderBy(files.createdAt);
+    });
+  }
+
+  /**
    * Convert files to response DTOs with presigned URLs.
-   * Used when including files in entry responses.
+   * Used when including files in entry, wish, or message responses.
    */
   async toFileResponses(fileList: File[]): Promise<FileResponseDto[]> {
     return Promise.all(fileList.map(async (file) => this.toFileResponse(file)));
@@ -484,7 +521,10 @@ export class FilesService {
    * Determine which pillar a file belongs to based on its parent.
    */
   private getFilePillar(file: File): PillarType {
-    return file.entryId ? 'important_info' : 'wishes';
+    if (file.entryId) return 'important_info';
+    if (file.wishId) return 'wishes';
+    if (file.messageId) return 'messages';
+    return 'wishes';
   }
 
   /**
@@ -800,13 +840,18 @@ export class FilesService {
 
   /**
    * Generate a unique storage key for a file.
-   * Path format: {entries|wishes}/{parentId}/{timestamp}-{random}.{ext}
+   * Path format: {entries|wishes|messages}/{parentId}/{timestamp}-{random}.{ext}
    */
   private generateStorageKey(parent: FileParent, filename: string): string {
     const timestamp = Date.now();
     const random = randomBytes(8).toString('hex');
     const ext = filename.includes('.') ? filename.split('.').pop() : '';
-    const prefix = parent.type === 'entry' ? 'entries' : 'wishes';
+    const prefixMap: Record<FileParent['type'], string> = {
+      entry: 'entries',
+      wish: 'wishes',
+      message: 'messages',
+    };
+    const prefix = prefixMap[parent.type];
     return `${prefix}/${parent.id}/${timestamp}-${random}${ext ? `.${ext}` : ''}`;
   }
 }
