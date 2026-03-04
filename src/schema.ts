@@ -599,6 +599,7 @@ export const files = pgTable(
     }),
 
     // File metadata
+    role: text('role'), // Frontend-controlled label (e.g. "thumbnail", "recorded_video")
     filename: text('filename').notNull(),
     mimeType: text('mime_type').notNull(),
     sizeBytes: integer('size_bytes').notNull(),

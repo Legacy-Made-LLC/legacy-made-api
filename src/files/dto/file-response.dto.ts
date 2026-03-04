@@ -6,6 +6,7 @@
  */
 export interface FileResponseDto {
   id: string;
+  role: string | null;
   filename: string;
   mimeType: string;
   sizeBytes: number;

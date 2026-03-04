@@ -109,6 +109,7 @@ export class FilesService {
           entryId: parent.type === 'entry' ? parent.id : undefined,
           wishId: parent.type === 'wish' ? parent.id : undefined,
           messageId: parent.type === 'message' ? parent.id : undefined,
+          role: dto.role ?? null,
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
@@ -186,6 +187,7 @@ export class FilesService {
           entryId: parent.type === 'entry' ? parent.id : undefined,
           wishId: parent.type === 'wish' ? parent.id : undefined,
           messageId: parent.type === 'message' ? parent.id : undefined,
+          role: dto.role ?? null,
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
@@ -400,6 +402,7 @@ export class FilesService {
     if (file.uploadStatus !== 'complete') {
       return {
         id: file.id,
+        role: file.role,
         filename: file.filename,
         mimeType: file.mimeType,
         sizeBytes: file.sizeBytes,
@@ -417,6 +420,7 @@ export class FilesService {
       if (!file.muxPlaybackId) {
         return {
           id: file.id,
+          role: file.role,
           filename: file.filename,
           mimeType: file.mimeType,
           sizeBytes: file.sizeBytes,
@@ -433,6 +437,7 @@ export class FilesService {
         const tokens = await this.mux.getSignedPlayerTokens(file.muxPlaybackId);
         return {
           id: file.id,
+          role: file.role,
           filename: file.filename,
           mimeType: file.mimeType,
           sizeBytes: file.sizeBytes,
@@ -448,6 +453,7 @@ export class FilesService {
         // Mux not configured or signing failed
         return {
           id: file.id,
+          role: file.role,
           filename: file.filename,
           mimeType: file.mimeType,
           sizeBytes: file.sizeBytes,
@@ -469,6 +475,7 @@ export class FilesService {
       );
       return {
         id: file.id,
+        role: file.role,
         filename: file.filename,
         mimeType: file.mimeType,
         sizeBytes: file.sizeBytes,
@@ -484,6 +491,7 @@ export class FilesService {
       // R2 not configured
       return {
         id: file.id,
+        role: file.role,
         filename: file.filename,
         mimeType: file.mimeType,
         sizeBytes: file.sizeBytes,
