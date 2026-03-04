@@ -213,6 +213,7 @@ export class MessagesService {
       title: message.title,
       notes: message.notes,
       sortOrder: message.sortOrder,
+      completionStatus: message.completionStatus,
       metadata: message.metadata as Record<string, unknown>,
       metadataSchema: message.metadataSchema as MetadataSchema | null,
       files,

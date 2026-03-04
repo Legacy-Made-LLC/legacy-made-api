@@ -14,6 +14,7 @@ export interface MessageResponseDto {
   title: string | null;
   notes: string | null;
   sortOrder: number;
+  completionStatus: string | null;
   metadata: Record<string, unknown>;
   metadataSchema: MetadataSchema | null;
   files: FileResponseDto[];
