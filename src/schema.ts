@@ -598,6 +598,11 @@ export const files = pgTable(
       onDelete: 'cascade',
     }),
 
+    // Optional parent file (e.g. thumbnail linked to a video)
+    parentFileId: uuid('parent_file_id').references(() => files.id, {
+      onDelete: 'set null',
+    }),
+
     // File metadata
     role: text('role'), // Frontend-controlled label (e.g. "thumbnail", "recorded_video")
     filename: text('filename').notNull(),
