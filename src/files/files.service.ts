@@ -423,6 +423,7 @@ export class FilesService {
       if (!file.muxPlaybackId) {
         return {
           id: file.id,
+          parentFileId: file.parentFileId,
           role: file.role,
           filename: file.filename,
           mimeType: file.mimeType,
@@ -440,6 +441,7 @@ export class FilesService {
         const tokens = await this.mux.getSignedPlayerTokens(file.muxPlaybackId);
         return {
           id: file.id,
+          parentFileId: file.parentFileId,
           role: file.role,
           filename: file.filename,
           mimeType: file.mimeType,
@@ -456,6 +458,7 @@ export class FilesService {
         // Mux not configured or signing failed
         return {
           id: file.id,
+          parentFileId: file.parentFileId,
           role: file.role,
           filename: file.filename,
           mimeType: file.mimeType,
