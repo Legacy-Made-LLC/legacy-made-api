@@ -109,7 +109,6 @@ export class FilesService {
           entryId: parent.type === 'entry' ? parent.id : undefined,
           wishId: parent.type === 'wish' ? parent.id : undefined,
           messageId: parent.type === 'message' ? parent.id : undefined,
-          parentFileId: dto.parentFileId ?? null,
           role: dto.role ?? null,
           filename: dto.filename,
           mimeType: dto.mimeType,
@@ -188,7 +187,6 @@ export class FilesService {
           entryId: parent.type === 'entry' ? parent.id : undefined,
           wishId: parent.type === 'wish' ? parent.id : undefined,
           messageId: parent.type === 'message' ? parent.id : undefined,
-          parentFileId: dto.parentFileId ?? null,
           role: dto.role ?? null,
           filename: dto.filename,
           mimeType: dto.mimeType,
@@ -404,7 +402,6 @@ export class FilesService {
     if (file.uploadStatus !== 'complete') {
       return {
         id: file.id,
-        parentFileId: file.parentFileId,
         role: file.role,
         filename: file.filename,
         mimeType: file.mimeType,
@@ -478,7 +475,6 @@ export class FilesService {
       );
       return {
         id: file.id,
-        parentFileId: file.parentFileId,
         role: file.role,
         filename: file.filename,
         mimeType: file.mimeType,
@@ -495,7 +491,6 @@ export class FilesService {
       // R2 not configured
       return {
         id: file.id,
-        parentFileId: file.parentFileId,
         role: file.role,
         filename: file.filename,
         mimeType: file.mimeType,
