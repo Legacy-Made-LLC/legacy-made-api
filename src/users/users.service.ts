@@ -42,25 +42,8 @@ export class UsersService {
   }
 
   /**
-   * Create a new user record with a default subscription.
-   * Called by Clerk webhook when a user signs up.
-   * RLS INSERT policy allows this without user context.
-   */
-  async createUser(user: NewUser) {
-    // INSERT policy allows any insert (security enforced by webhook signature)
-    const [created] = await this.db.bypassRls(async (tx) => {
-      const [newUser] = await tx.insert(users).values(user).returning();
-      // Create subscription with appropriate tier for new user
-      const tier = this.getDefaultSubscription();
-      await tx.insert(subscriptions).values({ userId: newUser.id, tier });
-      return [newUser];
-    });
-    return created;
-  }
-
-  /**
    * Create or update a user record.
-   * Called by Clerk webhook on user.updated events.
+   * Called by Clerk webhook on user.created and user.updated events.
    * Creates the user with a default subscription if they don't exist yet.
    */
   async upsertUser(data: NewUser) {

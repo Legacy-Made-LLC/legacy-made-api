@@ -39,10 +39,8 @@ export class UsersController {
 
     switch (evt.type) {
       case 'user.created':
-        await this.handleUserCreated(evt.data);
-        break;
       case 'user.updated':
-        await this.handleUserUpdated(evt.data);
+        await this.handleUserUpsert(evt.data);
         break;
       case 'user.deleted':
         await this.handleUserDeleted(evt.data);
@@ -50,19 +48,7 @@ export class UsersController {
     }
   }
 
-  private async handleUserCreated(data: UserJSON) {
-    await this.usersService.createUser({
-      id: data.id,
-      email: this.extractPrimaryEmail(data),
-      firstName: data.first_name,
-      lastName: data.last_name,
-      avatarUrl: data.image_url,
-      createdAt: new Date(data.created_at),
-      updatedAt: new Date(data.updated_at),
-    });
-  }
-
-  private async handleUserUpdated(data: UserJSON) {
+  private async handleUserUpsert(data: UserJSON) {
     await this.usersService.upsertUser({
       id: data.id,
       email: this.extractPrimaryEmail(data),
