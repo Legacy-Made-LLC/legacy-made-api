@@ -210,6 +210,35 @@ export class FilesService {
       // See initiateUpload() for details on the two-level quota enforcement.
       await this.entitlements.requireFileSizeQuotaInTx(tx, dto.sizeBytes);
 
+      // Validate parent file if provided and inherit its pillar FK
+      let parentFileId: string | null = null;
+      if (dto.parentFileId) {
+        const [parentFile] = await tx
+          .select({
+            id: files.id,
+            entryId: files.entryId,
+            wishId: files.wishId,
+            messageId: files.messageId,
+          })
+          .from(files)
+          .where(eq(files.id, dto.parentFileId));
+
+        if (!parentFile) {
+          throw new NotFoundException('Parent file not found');
+        }
+
+        // Verify the parent file belongs to the same pillar parent
+        const parentPillarId =
+          parentFile.entryId ?? parentFile.wishId ?? parentFile.messageId;
+        if (parentPillarId !== parent.id) {
+          throw new BadRequestException(
+            'Parent file must belong to the same entry/wish/message',
+          );
+        }
+
+        parentFileId = parentFile.id;
+      }
+
       // Create file record first to get the ID for passthrough
       const [file] = (await tx
         .insert(files)
@@ -217,6 +246,8 @@ export class FilesService {
           entryId: parent.type === 'entry' ? parent.id : undefined,
           wishId: parent.type === 'wish' ? parent.id : undefined,
           messageId: parent.type === 'message' ? parent.id : undefined,
+          role: dto.role,
+          parentFileId,
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
