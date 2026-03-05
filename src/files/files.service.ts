@@ -9,7 +9,7 @@ import { randomBytes } from 'crypto';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiConfigService } from '../config/api-config.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
-import { files, File, entries, wishes } from '../schema';
+import { files, File, entries, wishes, messages } from '../schema';
 import { R2Service } from './r2.service';
 import { MuxService } from './mux.service';
 import {
@@ -24,13 +24,14 @@ const PART_SIZE = 100 * 1024 * 1024;
 
 /**
  * Discriminated union for file parent reference.
- * Files can be attached to either an entry or a wish.
+ * Files can be attached to an entry, wish, or message.
  */
 export type FileParent =
   | { type: 'entry'; id: string }
-  | { type: 'wish'; id: string };
+  | { type: 'wish'; id: string }
+  | { type: 'message'; id: string };
 
-type PillarType = 'important_info' | 'wishes';
+type PillarType = 'important_info' | 'wishes' | 'messages';
 
 export interface UploadInitResult {
   fileId: string;
@@ -78,7 +79,7 @@ export class FilesService {
   ) {}
 
   /**
-   * Initiate an R2 file upload for an entry or wish.
+   * Initiate an R2 file upload for an entry, wish, or message.
    * Returns presigned URLs for direct upload to R2.
    */
   async initiateUpload(
@@ -100,13 +101,45 @@ export class FilesService {
       // enforcement here within the same transaction as file creation.
       await this.entitlements.requireFileSizeQuotaInTx(tx, dto.sizeBytes);
 
+      // Validate parent file if provided and inherit its pillar FK
+      let parentFileId: string | null = null;
+      if (dto.parentFileId) {
+        const [parentFile] = await tx
+          .select({
+            id: files.id,
+            entryId: files.entryId,
+            wishId: files.wishId,
+            messageId: files.messageId,
+          })
+          .from(files)
+          .where(eq(files.id, dto.parentFileId));
+
+        if (!parentFile) {
+          throw new NotFoundException('Parent file not found');
+        }
+
+        // Verify the parent file belongs to the same pillar parent
+        const parentPillarId =
+          parentFile.entryId ?? parentFile.wishId ?? parentFile.messageId;
+        if (parentPillarId !== parent.id) {
+          throw new BadRequestException(
+            'Parent file must belong to the same entry/wish/message',
+          );
+        }
+
+        parentFileId = parentFile.id;
+      }
+
       // Create file record
       const storageKey = this.generateStorageKey(parent, dto.filename);
-      const [file] = await tx
+      const [file] = (await tx
         .insert(files)
         .values({
           entryId: parent.type === 'entry' ? parent.id : undefined,
           wishId: parent.type === 'wish' ? parent.id : undefined,
+          messageId: parent.type === 'message' ? parent.id : undefined,
+          role: dto.role,
+          parentFileId,
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
@@ -114,7 +147,7 @@ export class FilesService {
           storageKey,
           uploadStatus: 'pending',
         })
-        .returning();
+        .returning()) as File[];
 
       const expiresAt = new Date(Date.now() + 3600 * 1000); // 1 hour
 
@@ -162,7 +195,7 @@ export class FilesService {
   }
 
   /**
-   * Initiate a Mux video upload for an entry or wish.
+   * Initiate a Mux video upload for an entry, wish, or message.
    * Returns a direct upload URL for uploading video to Mux.
    */
   async initiateVideoUpload(
@@ -177,12 +210,44 @@ export class FilesService {
       // See initiateUpload() for details on the two-level quota enforcement.
       await this.entitlements.requireFileSizeQuotaInTx(tx, dto.sizeBytes);
 
+      // Validate parent file if provided and inherit its pillar FK
+      let parentFileId: string | null = null;
+      if (dto.parentFileId) {
+        const [parentFile] = await tx
+          .select({
+            id: files.id,
+            entryId: files.entryId,
+            wishId: files.wishId,
+            messageId: files.messageId,
+          })
+          .from(files)
+          .where(eq(files.id, dto.parentFileId));
+
+        if (!parentFile) {
+          throw new NotFoundException('Parent file not found');
+        }
+
+        // Verify the parent file belongs to the same pillar parent
+        const parentPillarId =
+          parentFile.entryId ?? parentFile.wishId ?? parentFile.messageId;
+        if (parentPillarId !== parent.id) {
+          throw new BadRequestException(
+            'Parent file must belong to the same entry/wish/message',
+          );
+        }
+
+        parentFileId = parentFile.id;
+      }
+
       // Create file record first to get the ID for passthrough
-      const [file] = await tx
+      const [file] = (await tx
         .insert(files)
         .values({
           entryId: parent.type === 'entry' ? parent.id : undefined,
           wishId: parent.type === 'wish' ? parent.id : undefined,
+          messageId: parent.type === 'message' ? parent.id : undefined,
+          role: dto.role,
+          parentFileId,
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
@@ -190,7 +255,7 @@ export class FilesService {
           storageKey: '', // Will be updated after Mux upload creation
           uploadStatus: 'pending',
         })
-        .returning();
+        .returning()) as File[];
 
       // Create direct upload with Mux, including file ID in passthrough for webhook lookup
       const passthroughData = JSON.stringify({
@@ -217,7 +282,7 @@ export class FilesService {
   }
 
   /**
-   * Verify that a parent (entry or wish) exists.
+   * Verify that a parent (entry, wish, or message) exists.
    * RLS will enforce ownership.
    */
   private async verifyParentExists(
@@ -233,7 +298,7 @@ export class FilesService {
       if (!entry) {
         throw new NotFoundException(`Entry with id ${parent.id} not found`);
       }
-    } else {
+    } else if (parent.type === 'wish') {
       const [wish] = await tx
         .select({ id: wishes.id })
         .from(wishes)
@@ -241,6 +306,15 @@ export class FilesService {
 
       if (!wish) {
         throw new NotFoundException(`Wish with id ${parent.id} not found`);
+      }
+    } else {
+      const [message] = await tx
+        .select({ id: messages.id })
+        .from(messages)
+        .where(eq(messages.id, parent.id));
+
+      if (!message) {
+        throw new NotFoundException(`Message with id ${parent.id} not found`);
       }
     }
   }
@@ -348,8 +422,33 @@ export class FilesService {
   }
 
   /**
+   * List files for a message.
+   */
+  async findAllForMessage(messageId: string): Promise<File[]> {
+    return this.db.rls(async (tx) => {
+      return tx.select().from(files).where(eq(files.messageId, messageId));
+    });
+  }
+
+  /**
+   * Find files for multiple messages (batch fetch).
+   * Used when including files in message list responses.
+   */
+  async findByMessageIds(messageIds: string[]): Promise<File[]> {
+    if (messageIds.length === 0) return [];
+
+    return this.db.rls(async (tx) => {
+      return tx
+        .select()
+        .from(files)
+        .where(inArray(files.messageId, messageIds))
+        .orderBy(files.createdAt);
+    });
+  }
+
+  /**
    * Convert files to response DTOs with presigned URLs.
-   * Used when including files in entry responses.
+   * Used when including files in entry, wish, or message responses.
    */
   async toFileResponses(fileList: File[]): Promise<FileResponseDto[]> {
     return Promise.all(fileList.map(async (file) => this.toFileResponse(file)));
@@ -359,10 +458,16 @@ export class FilesService {
    * Convert a single file to response DTO with presigned URLs.
    */
   async toFileResponse(file: File): Promise<FileResponseDto> {
+    const base = {
+      id: file.id,
+      role: file.role,
+      parentFileId: file.parentFileId,
+    };
+
     // Only generate URLs for completed uploads
     if (file.uploadStatus !== 'complete') {
       return {
-        id: file.id,
+        ...base,
         filename: file.filename,
         mimeType: file.mimeType,
         sizeBytes: file.sizeBytes,
@@ -379,7 +484,7 @@ export class FilesService {
       // Video file
       if (!file.muxPlaybackId) {
         return {
-          id: file.id,
+          ...base,
           filename: file.filename,
           mimeType: file.mimeType,
           sizeBytes: file.sizeBytes,
@@ -395,7 +500,7 @@ export class FilesService {
       try {
         const tokens = await this.mux.getSignedPlayerTokens(file.muxPlaybackId);
         return {
-          id: file.id,
+          ...base,
           filename: file.filename,
           mimeType: file.mimeType,
           sizeBytes: file.sizeBytes,
@@ -410,7 +515,7 @@ export class FilesService {
         this.logger.error('Mux signing failed', e);
         // Mux not configured or signing failed
         return {
-          id: file.id,
+          ...base,
           filename: file.filename,
           mimeType: file.mimeType,
           sizeBytes: file.sizeBytes,
@@ -431,7 +536,7 @@ export class FilesService {
         3600,
       );
       return {
-        id: file.id,
+        ...base,
         filename: file.filename,
         mimeType: file.mimeType,
         sizeBytes: file.sizeBytes,
@@ -446,7 +551,7 @@ export class FilesService {
     } catch {
       // R2 not configured
       return {
-        id: file.id,
+        ...base,
         filename: file.filename,
         mimeType: file.mimeType,
         sizeBytes: file.sizeBytes,
@@ -484,7 +589,10 @@ export class FilesService {
    * Determine which pillar a file belongs to based on its parent.
    */
   private getFilePillar(file: File): PillarType {
-    return file.entryId ? 'important_info' : 'wishes';
+    if (file.entryId) return 'important_info';
+    if (file.wishId) return 'wishes';
+    if (file.messageId) return 'messages';
+    return 'wishes';
   }
 
   /**
@@ -665,18 +773,29 @@ export class FilesService {
     return this.db.rls(async (tx) => {
       const file = await this.findOneWithPillarCheck(tx, id, 'modify');
 
-      // Delete from storage
-      try {
-        if (file.storageType === 'r2') {
-          await this.r2.deleteObject(file.storageKey);
-        } else if (file.storageType === 'mux' && file.muxAssetId) {
-          await this.mux.deleteAsset(file.muxAssetId);
+      // Find child files that will be cascade-deleted so we can clean up their storage
+      const childFiles = await tx
+        .select()
+        .from(files)
+        .where(eq(files.parentFileId, id));
+
+      // Delete all related files from storage (parent + children) in parallel
+      const results = await Promise.allSettled(
+        [file, ...childFiles].map(async (f) => {
+          if (f.storageType === 'r2') {
+            await this.r2.deleteObject(f.storageKey);
+          } else if (f.storageType === 'mux' && f.muxAssetId) {
+            await this.mux.deleteAsset(f.muxAssetId);
+          }
+        }),
+      );
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          this.logger.error('Failed to delete file from storage', result.reason);
         }
-      } catch (error) {
-        // Log but don't fail - the DB record should still be deleted
-        this.logger.error('Failed to delete file from storage', error);
       }
 
+      // DB cascade will also delete child file records
       await tx.delete(files).where(eq(files.id, id));
       return { deleted: true };
     });
@@ -800,13 +919,18 @@ export class FilesService {
 
   /**
    * Generate a unique storage key for a file.
-   * Path format: {entries|wishes}/{parentId}/{timestamp}-{random}.{ext}
+   * Path format: {entries|wishes|messages}/{parentId}/{timestamp}-{random}.{ext}
    */
   private generateStorageKey(parent: FileParent, filename: string): string {
     const timestamp = Date.now();
     const random = randomBytes(8).toString('hex');
     const ext = filename.includes('.') ? filename.split('.').pop() : '';
-    const prefix = parent.type === 'entry' ? 'entries' : 'wishes';
+    const prefixMap: Record<FileParent['type'], string> = {
+      entry: 'entries',
+      wish: 'wishes',
+      message: 'messages',
+    };
+    const prefix = prefixMap[parent.type];
     return `${prefix}/${parent.id}/${timestamp}-${random}${ext ? `.${ext}` : ''}`;
   }
 }

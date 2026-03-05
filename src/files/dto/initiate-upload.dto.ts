@@ -75,6 +75,8 @@ function sanitizeFilename(filename: string): string {
  * for direct upload to R2 or Mux.
  */
 export const initiateUploadSchema = z.object({
+  role: z.string().max(64).optional().default('primary'),
+  parentFileId: z.string().uuid().optional(),
   filename: z
     .string()
     .min(1)

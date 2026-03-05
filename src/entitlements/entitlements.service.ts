@@ -387,23 +387,32 @@ export class EntitlementsService {
       }
 
       case 'storage_mb': {
-        const [entryFilesResult] = await tx
-          .select({ totalBytes: sum(files.sizeBytes) })
-          .from(files)
-          .innerJoin(entries, eq(files.entryId, entries.id))
-          .innerJoin(plans, eq(entries.planId, plans.id))
-          .where(eq(plans.userId, userId));
-
-        const [wishFilesResult] = await tx
-          .select({ totalBytes: sum(files.sizeBytes) })
-          .from(files)
-          .innerJoin(wishes, eq(files.wishId, wishes.id))
-          .innerJoin(plans, eq(wishes.planId, plans.id))
-          .where(eq(plans.userId, userId));
+        const [[entryFilesResult], [wishFilesResult], [messageFilesResult]] =
+          await Promise.all([
+            tx
+              .select({ totalBytes: sum(files.sizeBytes) })
+              .from(files)
+              .innerJoin(entries, eq(files.entryId, entries.id))
+              .innerJoin(plans, eq(entries.planId, plans.id))
+              .where(eq(plans.userId, userId)),
+            tx
+              .select({ totalBytes: sum(files.sizeBytes) })
+              .from(files)
+              .innerJoin(wishes, eq(files.wishId, wishes.id))
+              .innerJoin(plans, eq(wishes.planId, plans.id))
+              .where(eq(plans.userId, userId)),
+            tx
+              .select({ totalBytes: sum(files.sizeBytes) })
+              .from(files)
+              .innerJoin(messages, eq(files.messageId, messages.id))
+              .innerJoin(plans, eq(messages.planId, plans.id))
+              .where(eq(plans.userId, userId)),
+          ]);
 
         const entryBytes = Number(entryFilesResult?.totalBytes ?? 0);
         const wishBytes = Number(wishFilesResult?.totalBytes ?? 0);
-        const totalBytes = entryBytes + wishBytes;
+        const messageBytes = Number(messageFilesResult?.totalBytes ?? 0);
+        const totalBytes = entryBytes + wishBytes + messageBytes;
         return Math.ceil(totalBytes / (1024 * 1024));
       }
 
