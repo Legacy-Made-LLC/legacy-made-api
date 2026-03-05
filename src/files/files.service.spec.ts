@@ -4,14 +4,12 @@ import { FilesService } from './files.service';
 import { DbService } from '../db/db.service';
 import { ApiConfigService } from '../config/api-config.service';
 import { R2Service } from './r2.service';
-import { MuxService } from './mux.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
 
 describe('FilesService', () => {
   let service: FilesService;
   let mockDbService: any;
   let mockR2Service: any;
-  let mockMuxService: any;
   let mockEntitlementsService: any;
 
   const mockFile = {
@@ -25,24 +23,11 @@ describe('FilesService', () => {
     storageType: 'r2',
     storageKey: 'entries/entry-456/123-abc.pdf',
     uploadStatus: 'complete',
-    muxPlaybackId: null,
-    muxAssetId: null,
     accessLevel: 'private',
     shareToken: null,
     shareExpiresAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
-  };
-
-  const mockVideoFile = {
-    ...mockFile,
-    id: 'video-123',
-    filename: 'test.mp4',
-    mimeType: 'video/mp4',
-    storageType: 'mux',
-    storageKey: 'mux-upload-id',
-    muxPlaybackId: 'playback-123',
-    muxAssetId: 'asset-123',
   };
 
   beforeEach(async () => {
@@ -59,15 +44,6 @@ describe('FilesService', () => {
       getPartUploadUrls: jest.fn(),
       completeMultipartUpload: jest.fn(),
       deleteObject: jest.fn(),
-    };
-
-    mockMuxService = {
-      createDirectUpload: jest.fn(),
-      getUpload: jest.fn(),
-      getAsset: jest.fn(),
-      getSignedPlaybackUrl: jest.fn(),
-      getSignedPlayerTokens: jest.fn(),
-      deleteAsset: jest.fn(),
     };
 
     mockEntitlementsService = {
@@ -91,7 +67,6 @@ describe('FilesService', () => {
         { provide: DbService, useValue: mockDbService },
         { provide: ApiConfigService, useValue: mockApiConfigService },
         { provide: R2Service, useValue: mockR2Service },
-        { provide: MuxService, useValue: mockMuxService },
         { provide: EntitlementsService, useValue: mockEntitlementsService },
       ],
     }).compile();
@@ -133,7 +108,10 @@ describe('FilesService', () => {
         'https://r2.example.com/upload-url',
       );
 
-      const result = await service.initiateUpload('entry-123', dto);
+      const result = await service.initiateUpload(
+        { type: 'entry', id: 'entry-123' },
+        dto,
+      );
 
       expect(result.fileId).toBe('new-file-id');
       expect(result.uploadUrl).toBe('https://r2.example.com/upload-url');
@@ -176,7 +154,10 @@ describe('FilesService', () => {
         { partNumber: 2, uploadUrl: 'https://r2.example.com/part2' },
       ]);
 
-      const result = await service.initiateUpload('entry-123', dto);
+      const result = await service.initiateUpload(
+        { type: 'entry', id: 'entry-123' },
+        dto,
+      );
 
       expect(result.fileId).toBe('new-file-id');
       expect(result.uploadId).toBe('upload-id-123');
@@ -201,82 +182,13 @@ describe('FilesService', () => {
       mockDbService.rls.mockImplementation((cb: any) => cb(mockTx));
 
       await expect(
-        service.initiateUpload('nonexistent-entry', dto),
-      ).rejects.toThrow(NotFoundException);
-    });
-  });
-
-  describe('initiateVideoUpload', () => {
-    it('should initiate a Mux video upload', async () => {
-      const dto = {
-        filename: 'video.mp4',
-        mimeType: 'video/mp4',
-        sizeBytes: 50 * 1024 * 1024,
-      };
-
-      let selectCallCount = 0;
-      const mockTx = {
-        select: jest.fn().mockReturnThis(),
-        from: jest.fn().mockReturnThis(),
-        where: jest.fn().mockImplementation(() => {
-          selectCallCount++;
-          if (selectCallCount === 1) {
-            // Entry existence check
-            return Promise.resolve([{ id: 'entry-123' }]);
-          }
-          return mockTx;
-        }),
-        insert: jest.fn().mockReturnThis(),
-        values: jest.fn().mockReturnThis(),
-        returning: jest.fn().mockResolvedValue([{ id: 'video-file-id' }]),
-        update: jest.fn().mockReturnThis(),
-        set: jest.fn().mockReturnThis(),
-      };
-
-      mockDbService.rls.mockImplementation((cb: any) => cb(mockTx));
-      mockMuxService.createDirectUpload.mockResolvedValue({
-        uploadUrl: 'https://mux.example.com/upload',
-        uploadId: 'mux-upload-123',
-      });
-
-      const result = await service.initiateVideoUpload('entry-123', dto);
-
-      expect(result.fileId).toBe('video-file-id');
-      expect(result.uploadUrl).toBe('https://mux.example.com/upload');
-      expect(mockMuxService.createDirectUpload).toHaveBeenCalledWith({
-        meta: undefined,
-        passthrough: JSON.stringify({
-          fileId: 'video-file-id',
-          userPassthrough: undefined,
-        }),
-      });
-    });
-
-    it('should throw NotFoundException if entry does not exist', async () => {
-      const dto = {
-        filename: 'video.mp4',
-        mimeType: 'video/mp4',
-        sizeBytes: 50 * 1024 * 1024,
-      };
-
-      const mockTx = {
-        select: jest.fn().mockReturnThis(),
-        from: jest.fn().mockReturnThis(),
-        where: jest.fn().mockResolvedValue([]), // No entry found
-      };
-
-      mockDbService.rls.mockImplementation((cb: any) => cb(mockTx));
-
-      await expect(
-        service.initiateVideoUpload('nonexistent-entry', dto),
+        service.initiateUpload({ type: 'entry', id: 'nonexistent-entry' }, dto),
       ).rejects.toThrow(NotFoundException);
     });
   });
 
   describe('completeUpload', () => {
     it('should mark a simple upload as complete', async () => {
-      // For completeUpload, we need to handle the select/where chain differently
-      // because it's used in two places: findOneInTx and the update
       let selectCallCount = 0;
       const mockTx = {
         select: jest.fn().mockReturnThis(),
@@ -430,7 +342,7 @@ describe('FilesService', () => {
   });
 
   describe('getDownloadUrl', () => {
-    it('should return R2 download URL for R2 files', async () => {
+    it('should return R2 download URL', async () => {
       const mockTx = {
         select: jest.fn().mockReturnThis(),
         from: jest.fn().mockReturnThis(),
@@ -448,32 +360,6 @@ describe('FilesService', () => {
       expect(result.expiresIn).toBe(3600);
     });
 
-    it('should return Mux playback URL for video files', async () => {
-      const mockTx = {
-        select: jest.fn().mockReturnThis(),
-        from: jest.fn().mockReturnThis(),
-        where: jest.fn().mockResolvedValue([mockVideoFile]),
-      };
-
-      mockDbService.rls.mockImplementation((cb: any) => cb(mockTx));
-      mockMuxService.getSignedPlaybackUrl.mockResolvedValue(
-        'https://stream.mux.com/playback.m3u8?token=xyz',
-      );
-      mockMuxService.getSignedPlayerTokens.mockResolvedValue({
-        playbackToken: 'token1',
-        thumbnailToken: 'token2',
-        storyboardToken: 'token3',
-      });
-
-      const result = await service.getDownloadUrl('video-123');
-
-      expect(result.playbackUrl).toBe(
-        'https://stream.mux.com/playback.m3u8?token=xyz',
-      );
-      expect(result.playbackId).toBe('playback-123');
-      expect(result.tokens).toBeDefined();
-    });
-
     it('should throw BadRequestException if upload not complete', async () => {
       const pendingFile = { ...mockFile, uploadStatus: 'pending' };
       const mockTx = {
@@ -485,21 +371,6 @@ describe('FilesService', () => {
       mockDbService.rls.mockImplementation((cb: any) => cb(mockTx));
 
       await expect(service.getDownloadUrl('file-123')).rejects.toThrow(
-        BadRequestException,
-      );
-    });
-
-    it('should throw BadRequestException if Mux video not ready', async () => {
-      const videoNotReady = { ...mockVideoFile, muxPlaybackId: null };
-      const mockTx = {
-        select: jest.fn().mockReturnThis(),
-        from: jest.fn().mockReturnThis(),
-        where: jest.fn().mockResolvedValue([videoNotReady]),
-      };
-
-      mockDbService.rls.mockImplementation((cb: any) => cb(mockTx));
-
-      await expect(service.getDownloadUrl('video-123')).rejects.toThrow(
         BadRequestException,
       );
     });
@@ -637,7 +508,6 @@ describe('FilesService', () => {
     });
 
     it('should throw NotFoundException for non-shareable file', async () => {
-      // File with share token but accessLevel is still 'private'
       const mockTx = {
         select: jest.fn().mockReturnThis(),
         from: jest.fn().mockReturnThis(),
@@ -672,23 +542,6 @@ describe('FilesService', () => {
       );
     });
 
-    it('should delete Mux asset for video files', async () => {
-      const mockTx = {
-        select: jest.fn().mockReturnThis(),
-        from: jest.fn().mockReturnThis(),
-        where: jest.fn().mockResolvedValue([mockVideoFile]),
-        delete: jest.fn().mockReturnThis(),
-      };
-
-      mockDbService.rls.mockImplementation((cb: any) => cb(mockTx));
-      mockMuxService.deleteAsset.mockResolvedValue(undefined);
-
-      const result = await service.remove('video-123');
-
-      expect(result.deleted).toBe(true);
-      expect(mockMuxService.deleteAsset).toHaveBeenCalledWith('asset-123');
-    });
-
     it('should still delete DB record if storage deletion fails', async () => {
       const mockTx = {
         select: jest.fn().mockReturnThis(),
@@ -715,83 +568,6 @@ describe('FilesService', () => {
       );
 
       loggerErrorSpy.mockRestore();
-    });
-  });
-
-  describe('handleMuxWebhook', () => {
-    it('should update file status on video.asset.ready using passthrough', async () => {
-      const mockTx = {
-        update: jest.fn().mockReturnThis(),
-        set: jest.fn().mockReturnThis(),
-        where: jest.fn().mockResolvedValue([]),
-      };
-
-      mockDbService.bypassRls.mockImplementation((cb: any) => cb(mockTx));
-
-      await service.handleMuxWebhook({
-        type: 'video.asset.ready',
-        data: {
-          id: 'new-asset-id',
-          playback_ids: [{ id: 'new-playback-id' }],
-          passthrough: JSON.stringify({ fileId: 'video-123' }),
-        },
-      });
-
-      expect(mockTx.update).toHaveBeenCalled();
-      expect(mockTx.set).toHaveBeenCalledWith(
-        expect.objectContaining({
-          uploadStatus: 'complete',
-          muxAssetId: 'new-asset-id',
-          muxPlaybackId: 'new-playback-id',
-        }),
-      );
-    });
-
-    it('should update file status using upload_id fallback', async () => {
-      const mockTx = {
-        update: jest.fn().mockReturnThis(),
-        set: jest.fn().mockReturnThis(),
-        where: jest.fn().mockResolvedValue([]),
-      };
-
-      mockDbService.bypassRls.mockImplementation((cb: any) => cb(mockTx));
-
-      await service.handleMuxWebhook({
-        type: 'video.asset.ready',
-        data: {
-          id: 'new-asset-id',
-          playback_ids: [{ id: 'new-playback-id' }],
-          upload_id: 'mux-upload-123',
-        },
-      });
-
-      expect(mockTx.update).toHaveBeenCalled();
-    });
-
-    it('should mark file as failed on video.asset.errored', async () => {
-      const mockTx = {
-        update: jest.fn().mockReturnThis(),
-        set: jest.fn().mockReturnThis(),
-        where: jest.fn().mockResolvedValue([]),
-      };
-
-      mockDbService.bypassRls.mockImplementation((cb: any) => cb(mockTx));
-
-      await service.handleMuxWebhook({
-        type: 'video.asset.errored',
-        data: {
-          id: 'errored-asset-id',
-          passthrough: JSON.stringify({ fileId: 'video-123' }),
-        },
-      });
-
-      expect(mockTx.update).toHaveBeenCalled();
-      expect(mockTx.set).toHaveBeenCalledWith(
-        expect.objectContaining({
-          uploadStatus: 'failed',
-          muxAssetId: 'errored-asset-id',
-        }),
-      );
     });
   });
 
@@ -824,20 +600,6 @@ describe('FilesService', () => {
       const result = await service.toFileResponse(imageFile);
 
       expect(result.thumbnailUrl).toBe('https://r2.example.com/image.jpg');
-    });
-
-    it('should return playback tokens for Mux videos', async () => {
-      mockMuxService.getSignedPlayerTokens.mockResolvedValue({
-        playbackToken: 'play-token',
-        thumbnailToken: 'thumb-token',
-        storyboardToken: 'story-token',
-      });
-
-      const result = await service.toFileResponse(mockVideoFile);
-
-      expect(result.playbackId).toBe('playback-123');
-      expect(result.tokens).toBeDefined();
-      expect(result.tokens?.playbackToken).toBe('play-token');
     });
   });
 });

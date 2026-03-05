@@ -7,9 +7,6 @@ import { z } from 'zod';
  * For R2 multipart uploads, the client must provide:
  * - uploadId: The upload ID returned from initiateUpload
  * - parts: The ETags returned from each part upload
- *
- * For Mux uploads, this is typically not needed as Mux handles
- * completion automatically.
  */
 export const completeUploadSchema = z.object({
   /**

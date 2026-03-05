@@ -1,14 +1,11 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
-  Headers,
   Param,
   ParseUUIDPipe,
   Post,
-  RawBody,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
@@ -25,15 +22,11 @@ import {
   InitiateUploadDto,
 } from './dto';
 import { FilesService } from './files.service';
-import { MuxService } from './mux.service';
 import { ShareTokenPipe } from './share-token.pipe';
 
 @Controller()
 export class FilesController {
-  constructor(
-    private readonly filesService: FilesService,
-    private readonly muxService: MuxService,
-  ) {}
+  constructor(private readonly filesService: FilesService) {}
 
   // =========================================================================
   // Entry-scoped endpoints
@@ -66,33 +59,6 @@ export class FilesController {
     @Body() dto: InitiateUploadDto,
   ) {
     return this.filesService.initiateUpload(
-      { type: 'entry', id: entryId },
-      dto,
-    );
-  }
-
-  /**
-   * Initiate a video upload to Mux.
-   * POST /entries/:entryId/files/video/init
-   *
-   * Rate limited: 3 requests/second, 20 requests/minute
-   *
-   * Quota enforcement: See initiateEntryUpload() for details on the two-level
-   * quota check (guard for early rejection, service for precise enforcement).
-   */
-  @Post('entries/:entryId/files/video/init')
-  @UseGuards(ThrottlerGuard, EntitlementsGuard)
-  @RequiresPillar('important_info')
-  @RequiresQuota('storage_mb')
-  @Throttle({
-    short: { limit: 3, ttl: 1000 },
-    medium: { limit: 20, ttl: 60000 },
-  })
-  initiateEntryVideoUpload(
-    @Param('entryId', ParseUUIDPipe) entryId: string,
-    @Body() dto: InitiateUploadDto,
-  ) {
-    return this.filesService.initiateVideoUpload(
       { type: 'entry', id: entryId },
       dto,
     );
@@ -141,32 +107,6 @@ export class FilesController {
   }
 
   /**
-   * Initiate a video upload to Mux for a wish.
-   * POST /wishes/:wishId/files/video/init
-   *
-   * Rate limited: 3 requests/second, 20 requests/minute
-   *
-   * Quota enforcement: See initiateWishUpload() for details.
-   */
-  @Post('wishes/:wishId/files/video/init')
-  @UseGuards(ThrottlerGuard, EntitlementsGuard)
-  @RequiresPillar('wishes')
-  @RequiresQuota('storage_mb')
-  @Throttle({
-    short: { limit: 3, ttl: 1000 },
-    medium: { limit: 20, ttl: 60000 },
-  })
-  initiateWishVideoUpload(
-    @Param('wishId', ParseUUIDPipe) wishId: string,
-    @Body() dto: InitiateUploadDto,
-  ) {
-    return this.filesService.initiateVideoUpload(
-      { type: 'wish', id: wishId },
-      dto,
-    );
-  }
-
-  /**
    * List all files for a wish.
    * GET /wishes/:wishId/files
    */
@@ -206,32 +146,6 @@ export class FilesController {
     @Body() dto: InitiateUploadDto,
   ) {
     return this.filesService.initiateUpload(
-      { type: 'message', id: messageId },
-      dto,
-    );
-  }
-
-  /**
-   * Initiate a video upload to Mux for a message.
-   * POST /messages/:messageId/files/video/init
-   *
-   * Rate limited: 3 requests/second, 20 requests/minute
-   *
-   * Quota enforcement: See initiateMessageUpload() for details.
-   */
-  @Post('messages/:messageId/files/video/init')
-  @UseGuards(ThrottlerGuard, EntitlementsGuard)
-  @RequiresPillar('messages')
-  @RequiresQuota('storage_mb')
-  @Throttle({
-    short: { limit: 3, ttl: 1000 },
-    medium: { limit: 20, ttl: 60000 },
-  })
-  initiateMessageVideoUpload(
-    @Param('messageId', ParseUUIDPipe) messageId: string,
-    @Body() dto: InitiateUploadDto,
-  ) {
-    return this.filesService.initiateVideoUpload(
       { type: 'message', id: messageId },
       dto,
     );
@@ -280,7 +194,7 @@ export class FilesController {
   }
 
   /**
-   * Get a download/playback URL for a file.
+   * Get a download URL for a file.
    * GET /files/:id/download
    *
    * Pillar access is checked at the service level based on file's parent.
@@ -342,42 +256,5 @@ export class FilesController {
   @Public()
   accessSharedFile(@Param('token', ShareTokenPipe) token: string) {
     return this.filesService.accessSharedFile(token);
-  }
-
-  /**
-   * Handle Mux webhook events.
-   * POST /webhooks/mux
-   */
-  @Post('webhooks/mux')
-  @Public()
-  async handleMuxWebhook(
-    @Headers('mux-signature') signature: string,
-    @RawBody() rawBody: Buffer | undefined,
-  ) {
-    const body = rawBody?.toString() ?? '';
-    // Verify webhook signature
-    if (!signature) {
-      throw new BadRequestException('Missing Mux webhook signature');
-    }
-
-    try {
-      this.muxService.verifyWebhookSignature(body, signature);
-    } catch {
-      throw new BadRequestException('Invalid Mux webhook signature');
-    }
-
-    // Process the webhook event
-    const event = JSON.parse(body) as {
-      type: string;
-      data: {
-        id: string;
-        playback_ids?: Array<{ id: string }>;
-        upload_id?: string;
-      };
-    };
-
-    await this.filesService.handleMuxWebhook(event);
-
-    return { received: true };
   }
 }

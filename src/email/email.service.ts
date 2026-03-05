@@ -10,6 +10,7 @@ import { AccessRevokedByContactEmail } from './templates/access-revoked-by-conta
 import { InvitationImmediateEditEmail } from './templates/invitation-immediate-edit';
 import { InvitationImmediateViewEmail } from './templates/invitation-immediate-view';
 import { InvitationUponPassingEmail } from './templates/invitation-upon-passing';
+import { KeyRecoveryEmail } from './templates/key-recovery';
 
 export interface SendInvitationEmailData {
   to: string;
@@ -40,6 +41,14 @@ export interface SendAccessRevokedEmailData {
   ownerFirstName: string;
   contactName: string;
   revokedAt: Date;
+}
+
+export interface SendRecoveryNotificationData {
+  to: string;
+  firstName: string;
+  ipAddress: string;
+  userAgent: string;
+  recoveredAt: Date;
 }
 
 export interface UpdateSubscriberPropertiesData {
@@ -209,6 +218,39 @@ export class EmailService {
     } catch (error) {
       this.logger.error(
         `Failed to send access revoked email to ${data.to}`,
+        error,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Notify user that a key recovery was performed on their account
+   */
+  async sendRecoveryNotification(
+    data: SendRecoveryNotificationData,
+  ): Promise<void> {
+    try {
+      const emailHtml = await render(
+        KeyRecoveryEmail({
+          firstName: data.firstName,
+          ipAddress: data.ipAddress,
+          userAgent: data.userAgent,
+          recoveredAt: data.recoveredAt,
+        }),
+      );
+
+      await this.resend.emails.send({
+        from: this.fromUpdates,
+        to: data.to,
+        subject: 'Key recovery performed on your Legacy Made account',
+        html: emailHtml,
+      });
+
+      this.logger.log(`Recovery notification sent to ${data.to}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send recovery notification to ${data.to}`,
         error,
       );
       throw error;

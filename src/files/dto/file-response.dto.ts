@@ -11,14 +11,8 @@ export interface FileResponseDto {
   filename: string;
   mimeType: string;
   sizeBytes: number;
-  storageType: 'r2' | 'mux';
+  storageType: 'r2';
   uploadStatus: string;
   downloadUrl: string | null;
   thumbnailUrl: string | null;
-  playbackId: string | null;
-  tokens: {
-    playbackToken: string;
-    thumbnailToken: string;
-    storyboardToken: string;
-  } | null;
 }

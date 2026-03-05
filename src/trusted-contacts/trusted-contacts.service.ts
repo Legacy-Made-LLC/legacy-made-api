@@ -10,7 +10,13 @@ import { ApiConfigService } from '../config/api-config.service';
 import { DbService } from '../db/db.service';
 import { EmailService } from '../email/email.service';
 import { AccessLevel } from '../lib/types/cls';
-import { trustedContacts, users, plans, type TrustedContact } from '../schema';
+import {
+  trustedContacts,
+  users,
+  plans,
+  encryptedDeks,
+  type TrustedContact,
+} from '../schema';
 import { CreateTrustedContactDto } from './dto/create-trusted-contact.dto';
 import { UpdateTrustedContactDto } from './dto/update-trusted-contact.dto';
 import { InvitationTokenService } from './invitation-token.service';
@@ -246,12 +252,34 @@ export class TrustedContactsService {
         })
         .where(eq(trustedContacts.id, id));
 
+      // Delete the contact's encrypted DEK copy if they had one
+      let dekCopyDeleted = false;
+      if (trustedContact.clerkUserId) {
+        const planOwner = await tx
+          .select({ userId: plans.userId })
+          .from(plans)
+          .where(eq(plans.id, planId));
+
+        if (planOwner[0]) {
+          await tx
+            .delete(encryptedDeks)
+            .where(
+              and(
+                eq(encryptedDeks.ownerId, planOwner[0].userId),
+                eq(encryptedDeks.recipientId, trustedContact.clerkUserId),
+                eq(encryptedDeks.dekType, 'contact'),
+              ),
+            );
+          dekCopyDeleted = true;
+        }
+      }
+
       await this.activityLog.log(tx, {
         planId,
         action: 'updated',
         resourceType: 'trusted_contact',
         resourceId: id,
-        details: { statusChange: 'revoked_by_owner' },
+        details: { statusChange: 'revoked_by_owner', dekCopyDeleted },
       });
 
       this.logger.log(`Revoked trusted contact ${id} from plan ${planId}`);

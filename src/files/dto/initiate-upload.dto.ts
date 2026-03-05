@@ -28,28 +28,13 @@ export const ALLOWED_MIME_TYPES = [
   'audio/aac',
   'audio/m4a',
   'audio/x-m4a',
-  // Video (for Mux uploads)
+  // Video (uploaded as encrypted MP4 to R2)
   'video/mp4',
   'video/quicktime',
   'video/webm',
   'video/x-msvideo',
   'video/x-matroska',
 ] as const;
-
-/**
- * Mux video metadata that will be associated with the asset.
- * See: https://docs.mux.com/api-reference#video/operation/create-asset
- */
-export const muxMetaSchema = z.object({
-  /** Identifier to link the asset to your own data. Max 128 characters. */
-  externalId: z.string().max(128).optional(),
-  /** Identifier to track the creator of the asset. Max 128 characters. */
-  creatorId: z.string().max(128).optional(),
-  /** The asset title. Max 512 characters. */
-  title: z.string().max(512).optional(),
-});
-
-export type MuxMeta = z.infer<typeof muxMetaSchema>;
 
 /**
  * Sanitize a filename by removing path separators and dangerous characters.
@@ -72,7 +57,7 @@ function sanitizeFilename(filename: string): string {
  * Schema for initiating a file upload.
  *
  * The client provides file metadata, and the API returns presigned URLs
- * for direct upload to R2 or Mux.
+ * for direct upload to R2.
  */
 export const initiateUploadSchema = z.object({
   role: z.string().max(64).optional().default('primary'),
@@ -99,15 +84,6 @@ export const initiateUploadSchema = z.object({
     .int()
     .positive()
     .max(1024 * 1024 * 1024), // 1GB max
-  /**
-   * Mux asset metadata (for video uploads only).
-   */
-  meta: muxMetaSchema.optional(),
-  /**
-   * Arbitrary passthrough string included in Mux asset details and webhooks.
-   * Max 255 characters. (for video uploads only)
-   */
-  passthrough: z.string().max(255).optional(),
 });
 
 export class InitiateUploadDto extends createZodDto(initiateUploadSchema) {}

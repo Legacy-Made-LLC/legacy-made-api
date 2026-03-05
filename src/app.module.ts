@@ -23,6 +23,7 @@ import { PlanAccessModule } from './plan-access/plan-access.module';
 import { SharedPlansModule } from './shared-plans/shared-plans.module';
 import { ActivityLogModule } from './activity-log/activity-log.module';
 import { MessagesModule } from './messages/messages.module';
+import { EncryptionModule } from './encryption/encryption.module';
 
 @Module({
   imports: [
@@ -63,6 +64,7 @@ import { MessagesModule } from './messages/messages.module';
     SharedPlansModule,
     ActivityLogModule,
     MessagesModule,
+    EncryptionModule,
   ],
   providers: [
     {
