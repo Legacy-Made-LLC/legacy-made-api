@@ -598,7 +598,13 @@ export const files = pgTable(
       onDelete: 'cascade',
     }),
 
+    // Relationship: link child files to a parent (e.g. thumbnail → video)
+    parentFileId: uuid('parent_file_id').references(() => files.id, {
+      onDelete: 'cascade',
+    }),
+
     // File metadata
+    role: text('role').default('primary').notNull(),
     filename: text('filename').notNull(),
     mimeType: text('mime_type').notNull(),
     sizeBytes: integer('size_bytes').notNull(),
@@ -631,6 +637,7 @@ export const files = pgTable(
     index('files_entry_id_idx').on(table.entryId),
     index('files_wish_id_idx').on(table.wishId),
     index('files_message_id_idx').on(table.messageId),
+    index('files_parent_file_id_idx').on(table.parentFileId),
     index('files_share_token_idx').on(table.shareToken),
     shouldBypassRlsPolicy(),
     crudPolicy({

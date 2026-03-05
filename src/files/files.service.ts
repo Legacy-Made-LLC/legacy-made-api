@@ -101,14 +101,45 @@ export class FilesService {
       // enforcement here within the same transaction as file creation.
       await this.entitlements.requireFileSizeQuotaInTx(tx, dto.sizeBytes);
 
+      // Validate parent file if provided and inherit its pillar FK
+      let parentFileId: string | null = null;
+      if (dto.parentFileId) {
+        const [parentFile] = await tx
+          .select({
+            id: files.id,
+            entryId: files.entryId,
+            wishId: files.wishId,
+            messageId: files.messageId,
+          })
+          .from(files)
+          .where(eq(files.id, dto.parentFileId));
+
+        if (!parentFile) {
+          throw new NotFoundException('Parent file not found');
+        }
+
+        // Verify the parent file belongs to the same pillar parent
+        const parentPillarId =
+          parentFile.entryId ?? parentFile.wishId ?? parentFile.messageId;
+        if (parentPillarId !== parent.id) {
+          throw new BadRequestException(
+            'Parent file must belong to the same entry/wish/message',
+          );
+        }
+
+        parentFileId = parentFile.id;
+      }
+
       // Create file record
       const storageKey = this.generateStorageKey(parent, dto.filename);
-      const [file] = await tx
+      const [file] = (await tx
         .insert(files)
         .values({
           entryId: parent.type === 'entry' ? parent.id : undefined,
           wishId: parent.type === 'wish' ? parent.id : undefined,
           messageId: parent.type === 'message' ? parent.id : undefined,
+          role: dto.role,
+          parentFileId,
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
@@ -116,7 +147,7 @@ export class FilesService {
           storageKey,
           uploadStatus: 'pending',
         })
-        .returning();
+        .returning()) as File[];
 
       const expiresAt = new Date(Date.now() + 3600 * 1000); // 1 hour
 
@@ -180,7 +211,7 @@ export class FilesService {
       await this.entitlements.requireFileSizeQuotaInTx(tx, dto.sizeBytes);
 
       // Create file record first to get the ID for passthrough
-      const [file] = await tx
+      const [file] = (await tx
         .insert(files)
         .values({
           entryId: parent.type === 'entry' ? parent.id : undefined,
@@ -193,7 +224,7 @@ export class FilesService {
           storageKey: '', // Will be updated after Mux upload creation
           uploadStatus: 'pending',
         })
-        .returning();
+        .returning()) as File[];
 
       // Create direct upload with Mux, including file ID in passthrough for webhook lookup
       const passthroughData = JSON.stringify({
@@ -396,10 +427,16 @@ export class FilesService {
    * Convert a single file to response DTO with presigned URLs.
    */
   async toFileResponse(file: File): Promise<FileResponseDto> {
+    const base = {
+      id: file.id,
+      role: file.role,
+      parentFileId: file.parentFileId,
+    };
+
     // Only generate URLs for completed uploads
     if (file.uploadStatus !== 'complete') {
       return {
-        id: file.id,
+        ...base,
         filename: file.filename,
         mimeType: file.mimeType,
         sizeBytes: file.sizeBytes,
@@ -416,7 +453,7 @@ export class FilesService {
       // Video file
       if (!file.muxPlaybackId) {
         return {
-          id: file.id,
+          ...base,
           filename: file.filename,
           mimeType: file.mimeType,
           sizeBytes: file.sizeBytes,
@@ -432,7 +469,7 @@ export class FilesService {
       try {
         const tokens = await this.mux.getSignedPlayerTokens(file.muxPlaybackId);
         return {
-          id: file.id,
+          ...base,
           filename: file.filename,
           mimeType: file.mimeType,
           sizeBytes: file.sizeBytes,
@@ -447,7 +484,7 @@ export class FilesService {
         this.logger.error('Mux signing failed', e);
         // Mux not configured or signing failed
         return {
-          id: file.id,
+          ...base,
           filename: file.filename,
           mimeType: file.mimeType,
           sizeBytes: file.sizeBytes,
@@ -468,7 +505,7 @@ export class FilesService {
         3600,
       );
       return {
-        id: file.id,
+        ...base,
         filename: file.filename,
         mimeType: file.mimeType,
         sizeBytes: file.sizeBytes,
@@ -483,7 +520,7 @@ export class FilesService {
     } catch {
       // R2 not configured
       return {
-        id: file.id,
+        ...base,
         filename: file.filename,
         mimeType: file.mimeType,
         sizeBytes: file.sizeBytes,
@@ -705,18 +742,29 @@ export class FilesService {
     return this.db.rls(async (tx) => {
       const file = await this.findOneWithPillarCheck(tx, id, 'modify');
 
-      // Delete from storage
-      try {
-        if (file.storageType === 'r2') {
-          await this.r2.deleteObject(file.storageKey);
-        } else if (file.storageType === 'mux' && file.muxAssetId) {
-          await this.mux.deleteAsset(file.muxAssetId);
+      // Find child files that will be cascade-deleted so we can clean up their storage
+      const childFiles = await tx
+        .select()
+        .from(files)
+        .where(eq(files.parentFileId, id));
+
+      // Delete all related files from storage (parent + children) in parallel
+      const results = await Promise.allSettled(
+        [file, ...childFiles].map(async (f) => {
+          if (f.storageType === 'r2') {
+            await this.r2.deleteObject(f.storageKey);
+          } else if (f.storageType === 'mux' && f.muxAssetId) {
+            await this.mux.deleteAsset(f.muxAssetId);
+          }
+        }),
+      );
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          this.logger.error('Failed to delete file from storage', result.reason);
         }
-      } catch (error) {
-        // Log but don't fail - the DB record should still be deleted
-        this.logger.error('Failed to delete file from storage', error);
       }
 
+      // DB cascade will also delete child file records
       await tx.delete(files).where(eq(files.id, id));
       return { deleted: true };
     });
