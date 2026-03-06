@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { and, inArray, lt, not, sql } from 'drizzle-orm';
+import { and, eq, inArray, lt, not, or, sql } from 'drizzle-orm';
 import { DbService } from '../db/db.service';
 import { subscriptions } from '../schema';
 import {
@@ -84,6 +84,11 @@ export class SubscriptionExpirationService {
             lt(subscriptions.currentPeriodEnd, gracePeriodAgo),
             // Is on a paid tier (not free or lifetime)
             not(inArray(subscriptions.tier, NON_EXPIRING_TIERS)),
+            // Not already canceled
+            or(
+              sql`${subscriptions.status} IS NULL`,
+              not(eq(subscriptions.status, 'canceled')),
+            ),
           ),
         );
 
@@ -107,7 +112,7 @@ export class SubscriptionExpirationService {
     await this.db.bypassRls(async (tx) => {
       await tx
         .update(subscriptions)
-        .set({ tier: 'free' })
+        .set({ tier: 'free', status: 'canceled' })
         .where(inArray(subscriptions.id, ids));
     });
 

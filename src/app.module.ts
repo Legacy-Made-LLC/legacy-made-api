@@ -28,6 +28,8 @@ import { MessagesModule } from './messages/messages.module';
 import { EncryptionModule } from './encryption/encryption.module';
 import { PushNotificationsModule } from './push-notifications/push-notifications.module';
 import { PreferencesModule } from './preferences/preferences.module';
+import { StripeModule } from './stripe/stripe.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 
 @Module({
   imports: [
@@ -72,6 +74,8 @@ import { PreferencesModule } from './preferences/preferences.module';
     MessagesModule,
     EncryptionModule,
     PreferencesModule,
+    StripeModule,
+    SubscriptionsModule,
   ],
   providers: [
     {

@@ -74,6 +74,15 @@ export const configSchema = z.object({
     .optional()
     .transform((val) => val?.split(',') ?? []),
 
+  // STRIPE
+  STRIPE_SECRET_KEY: z.string(),
+  STRIPE_WEBHOOK_SECRET: z.string(),
+  STRIPE_PRICE_ID_INDIVIDUAL: z.string(),
+  STRIPE_PRICE_ID_FAMILY: z.string(),
+
+  // APP
+  APP_BASE_URL: z.url().default('https://app.mylegacymade.com'),
+
   // FEATURE FLAGS
   GRANT_LIFETIME_TO_NEW_USERS: z
     .stringbool({

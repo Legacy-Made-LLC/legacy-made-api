@@ -173,9 +173,11 @@ export const subscriptions = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     tier: text('tier').notNull().default('free'),
 
-    // Future Stripe fields (nullable)
+    // Stripe fields
     stripeCustomerId: text('stripe_customer_id'),
     stripeSubscriptionId: text('stripe_subscription_id'),
+    stripePriceId: text('stripe_price_id'),
+    status: text('status'), // 'active' | 'past_due' | 'canceled' | 'trialing'
     currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
 
     createdAt: timestamp('created_at', { withTimezone: true })
