@@ -268,6 +268,7 @@ export class TrustedContactsService {
                 eq(encryptedDeks.ownerId, planOwner[0].userId),
                 eq(encryptedDeks.recipientId, trustedContact.clerkUserId),
                 eq(encryptedDeks.dekType, 'contact'),
+                eq(encryptedDeks.planId, planId),
               ),
             );
           dekCopyDeleted = true;

@@ -13,6 +13,7 @@ export interface FileResponseDto {
   sizeBytes: number;
   storageType: 'r2';
   uploadStatus: string;
+  isEncrypted: boolean;
   downloadUrl: string | null;
   thumbnailUrl: string | null;
 }

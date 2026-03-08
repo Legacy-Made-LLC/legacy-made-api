@@ -4,14 +4,15 @@ import {
   Delete,
   Get,
   Param,
+  ParseIntPipe,
   ParseUUIDPipe,
   Post,
-  Put,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
-import { Request } from 'express';
+import { type Request } from 'express';
 import { EncryptionService } from './encryption.service';
 import { DeviceLinkingService } from './device-linking.service';
 import {
@@ -19,6 +20,7 @@ import {
   StoreEncryptedDekDto,
   EnableEscrowDto,
   InitiateRecoveryDto,
+  SetupEncryptionDto,
   DepositPayloadDto,
   ClaimSessionDto,
 } from './dto';
@@ -34,6 +36,16 @@ export class EncryptionController {
   // User Keys
   // =========================================================================
 
+  @Post('setup')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    short: { limit: 3, ttl: 1000 },
+    medium: { limit: 10, ttl: 60000 },
+  })
+  setupEncryption(@Body() dto: SetupEncryptionDto) {
+    return this.encryptionService.setupEncryption(dto);
+  }
+
   @Post('keys')
   @UseGuards(ThrottlerGuard)
   @Throttle({
@@ -44,24 +56,19 @@ export class EncryptionController {
     return this.encryptionService.registerPublicKey(dto);
   }
 
-  @Put('keys')
-  @UseGuards(ThrottlerGuard)
-  @Throttle({
-    short: { limit: 3, ttl: 1000 },
-    medium: { limit: 10, ttl: 60000 },
-  })
-  rotatePublicKey(@Body() dto: RegisterPublicKeyDto) {
-    return this.encryptionService.rotatePublicKey(dto);
+  @Delete('keys/:keyVersion')
+  deleteKey(@Param('keyVersion', ParseIntPipe) keyVersion: number) {
+    return this.encryptionService.deleteKey(keyVersion);
   }
 
   @Get('keys/me')
-  getMyPublicKey() {
-    return this.encryptionService.getMyPublicKey();
+  getMyKeys() {
+    return this.encryptionService.getMyKeys();
   }
 
   @Get('keys/:userId')
-  getUserPublicKey(@Param('userId') userId: string) {
-    return this.encryptionService.getUserPublicKey(userId);
+  getUserKeys(@Param('userId') userId: string) {
+    return this.encryptionService.getUserKeys(userId);
   }
 
   // =========================================================================
@@ -74,26 +81,33 @@ export class EncryptionController {
   }
 
   @Get('deks/mine/:ownerId')
-  getMyEncryptedDek(@Param('ownerId') ownerId: string) {
-    return this.encryptionService.getMyEncryptedDek(ownerId);
+  getMyEncryptedDeks(
+    @Param('ownerId') ownerId: string,
+    @Query('planId', ParseUUIDPipe) planId: string,
+  ) {
+    return this.encryptionService.getMyEncryptedDeks(ownerId, planId);
   }
 
   @Get('deks')
-  getEncryptedDeksForOwner() {
-    return this.encryptionService.getEncryptedDeksForOwner();
+  getEncryptedDeksForOwner(@Query('planId') planId?: string) {
+    return this.encryptionService.getEncryptedDeksForOwner(planId);
   }
 
   @Delete('deks/:recipientId')
-  deleteContactDek(@Param('recipientId') recipientId: string) {
-    return this.encryptionService.deleteContactDek(recipientId);
+  deleteContactDek(
+    @Param('recipientId') recipientId: string,
+    @Query('planId', ParseUUIDPipe) planId: string,
+  ) {
+    return this.encryptionService.deleteContactDek(recipientId, planId);
   }
 
   @Get('deks/status/:ownerId/:recipientId')
   getDekStatus(
     @Param('ownerId') ownerId: string,
     @Param('recipientId') recipientId: string,
+    @Query('planId', ParseUUIDPipe) planId: string,
   ) {
-    return this.encryptionService.getDekStatus(ownerId, recipientId);
+    return this.encryptionService.getDekStatus(ownerId, recipientId, planId);
   }
 
   // =========================================================================

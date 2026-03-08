@@ -129,6 +129,7 @@ export class FilesService {
           filename: dto.filename,
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
+          isEncrypted: dto.isEncrypted,
           storageType: 'r2',
           storageKey,
           uploadStatus: 'pending',
@@ -361,6 +362,7 @@ export class FilesService {
       id: file.id,
       role: file.role,
       parentFileId: file.parentFileId,
+      isEncrypted: file.isEncrypted,
     };
 
     // Only generate URLs for completed uploads

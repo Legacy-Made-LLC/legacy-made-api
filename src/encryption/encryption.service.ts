@@ -4,7 +4,7 @@ import {
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { DbService } from '../db/db.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import { EmailService } from '../email/email.service';
@@ -21,6 +21,7 @@ import {
   StoreEncryptedDekDto,
   EnableEscrowDto,
   InitiateRecoveryDto,
+  SetupEncryptionDto,
 } from './dto';
 
 @Injectable()
@@ -39,10 +40,10 @@ export class EncryptionService {
   // =========================================================================
 
   /**
-   * Register an initial public key for the current user.
-   * Rejects if a key already exists (use rotatePublicKey instead).
+   * First-launch setup: register the first public key and store the initial
+   * owner DEK copy atomically. Throws ConflictException if any keys exist.
    */
-  async registerPublicKey(dto: RegisterPublicKeyDto) {
+  async setupEncryption(dto: SetupEncryptionDto) {
     const userId = this.cls.requireUserId();
 
     return this.db.rls(async (tx) => {
@@ -53,7 +54,7 @@ export class EncryptionService {
 
       if (existing) {
         throw new ConflictException(
-          'Public key already registered. Use PUT to rotate.',
+          'Encryption already set up. Use POST /encryption/keys to add more keys.',
         );
       }
 
@@ -63,84 +64,123 @@ export class EncryptionService {
           userId,
           publicKey: dto.publicKey,
           keyVersion: 1,
+          keyType: 'device',
+          deviceLabel: dto.deviceLabel,
         })
         .returning();
 
-      return key;
+      const [dek] = await tx
+        .insert(encryptedDeks)
+        .values({
+          planId: dto.planId,
+          ownerId: userId,
+          recipientId: userId,
+          dekType: 'owner',
+          encryptedDek: dto.encryptedDek,
+          keyVersion: 1,
+        })
+        .returning();
+
+      return { keyVersion: key.keyVersion, dekId: dek.id };
     });
   }
 
   /**
-   * Rotate the public key for the current user.
-   * Increments the key version.
+   * Register an additional public key for the current user.
+   * Requires at least one key to exist (use setupEncryption for the first key).
+   * Uses SELECT ... FOR UPDATE to prevent key_version race conditions.
    */
-  async rotatePublicKey(dto: RegisterPublicKeyDto) {
+  async registerPublicKey(dto: RegisterPublicKeyDto) {
     const userId = this.cls.requireUserId();
 
     return this.db.rls(async (tx) => {
-      const [existing] = await tx
-        .select()
-        .from(userKeys)
-        .where(eq(userKeys.userId, userId));
+      // Lock rows and get max version to prevent race conditions
+      const rows = await tx.execute(
+        sql`SELECT key_version FROM user_keys WHERE user_id = ${userId} ORDER BY key_version DESC FOR UPDATE`,
+      );
 
-      if (!existing) {
+      if (!rows.rows.length) {
         throw new NotFoundException(
-          'No public key registered. Use POST to register first.',
+          'No keys registered. Use POST /encryption/setup first.',
         );
       }
 
-      const [updated] = await tx
-        .update(userKeys)
-        .set({
-          publicKey: dto.publicKey,
-          keyVersion: existing.keyVersion + 1,
-        })
-        .where(eq(userKeys.userId, userId))
-        .returning();
+      const maxVersion = rows.rows[0].key_version as number;
+      const nextVersion = maxVersion + 1;
 
-      return updated;
-    });
-  }
-
-  /**
-   * Get the current user's public key.
-   */
-  async getMyPublicKey() {
-    const userId = this.cls.requireUserId();
-
-    return this.db.rls(async (tx) => {
       const [key] = await tx
-        .select()
-        .from(userKeys)
-        .where(eq(userKeys.userId, userId));
-
-      if (!key) {
-        throw new NotFoundException('No public key registered');
-      }
+        .insert(userKeys)
+        .values({
+          userId,
+          publicKey: dto.publicKey,
+          keyVersion: nextVersion,
+          keyType: dto.keyType,
+          deviceLabel: dto.deviceLabel,
+        })
+        .returning();
 
       return key;
     });
   }
 
   /**
-   * Get another user's public key (for key exchange).
+   * Delete a key by version for the current user.
+   * Also deletes all encrypted DEK copies for this key version in the same transaction.
    */
-  async getUserPublicKey(userId: string) {
+  async deleteKey(keyVersion: number) {
+    const userId = this.cls.requireUserId();
+
     return this.db.rls(async (tx) => {
-      const [key] = await tx
+      await tx
+        .delete(userKeys)
+        .where(
+          and(eq(userKeys.userId, userId), eq(userKeys.keyVersion, keyVersion)),
+        );
+
+      await tx
+        .delete(encryptedDeks)
+        .where(
+          and(
+            eq(encryptedDeks.recipientId, userId),
+            eq(encryptedDeks.keyVersion, keyVersion),
+          ),
+        );
+
+      return { deleted: true, keyVersion };
+    });
+  }
+
+  /**
+   * Get all public keys for the current user, ordered by keyVersion.
+   */
+  async getMyKeys() {
+    const userId = this.cls.requireUserId();
+
+    return this.db.rls(async (tx) => {
+      return tx
         .select()
         .from(userKeys)
-        .where(eq(userKeys.userId, userId));
+        .where(eq(userKeys.userId, userId))
+        .orderBy(userKeys.keyVersion);
+    });
+  }
 
-      if (!key) {
-        throw new NotFoundException('User has no public key registered');
-      }
-
-      return {
-        userId: key.userId,
-        publicKey: key.publicKey,
-        keyVersion: key.keyVersion,
-      };
+  /**
+   * Get another user's public keys (for key exchange).
+   */
+  async getUserKeys(userId: string) {
+    return this.db.rls(async (tx) => {
+      return tx
+        .select({
+          userId: userKeys.userId,
+          publicKey: userKeys.publicKey,
+          keyVersion: userKeys.keyVersion,
+          keyType: userKeys.keyType,
+          deviceLabel: userKeys.deviceLabel,
+        })
+        .from(userKeys)
+        .where(eq(userKeys.userId, userId))
+        .orderBy(userKeys.keyVersion);
     });
   }
 
@@ -158,6 +198,7 @@ export class EncryptionService {
       const [dek] = await tx
         .insert(encryptedDeks)
         .values({
+          planId: dto.planId,
           ownerId,
           recipientId: dto.recipientId,
           dekType: dto.dekType,
@@ -166,13 +207,14 @@ export class EncryptionService {
         })
         .onConflictDoUpdate({
           target: [
+            encryptedDeks.planId,
             encryptedDeks.ownerId,
             encryptedDeks.recipientId,
+            encryptedDeks.keyVersion,
             encryptedDeks.dekType,
           ],
           set: {
             encryptedDek: dto.encryptedDek,
-            keyVersion: dto.keyVersion,
           },
         })
         .returning();
@@ -182,48 +224,52 @@ export class EncryptionService {
   }
 
   /**
-   * Get my DEK copy from a specific owner (I am the recipient).
+   * Get my DEK copies from a specific owner for a specific plan (I am the recipient).
+   * Returns an array (multiple copies at different keyVersions).
    */
-  async getMyEncryptedDek(ownerId: string) {
+  async getMyEncryptedDeks(ownerId: string, planId: string) {
     const recipientId = this.cls.requireUserId();
 
     return this.db.rls(async (tx) => {
-      const [dek] = await tx
+      return tx
         .select()
         .from(encryptedDeks)
         .where(
           and(
             eq(encryptedDeks.ownerId, ownerId),
             eq(encryptedDeks.recipientId, recipientId),
+            eq(encryptedDeks.planId, planId),
           ),
         );
-
-      if (!dek) {
-        throw new NotFoundException('No DEK copy found for this owner');
-      }
-
-      return dek;
     });
   }
 
   /**
    * List all DEK copies I own (I am the data owner).
+   * Optionally filter by planId.
    */
-  async getEncryptedDeksForOwner() {
+  async getEncryptedDeksForOwner(planId?: string) {
     const ownerId = this.cls.requireUserId();
 
     return this.db.rls(async (tx) => {
+      const conditions = [eq(encryptedDeks.ownerId, ownerId)];
+
+      if (planId) {
+        conditions.push(eq(encryptedDeks.planId, planId));
+      }
+
       return tx
         .select()
         .from(encryptedDeks)
-        .where(eq(encryptedDeks.ownerId, ownerId));
+        .where(and(...conditions));
     });
   }
 
   /**
    * Delete a contact's DEK copy (revocation). Owner only.
+   * Scoped to a specific plan.
    */
-  async deleteContactDek(recipientId: string) {
+  async deleteContactDek(recipientId: string, planId: string) {
     const ownerId = this.cls.requireUserId();
 
     return this.db.rls(async (tx) => {
@@ -234,6 +280,7 @@ export class EncryptionService {
             eq(encryptedDeks.ownerId, ownerId),
             eq(encryptedDeks.recipientId, recipientId),
             eq(encryptedDeks.dekType, 'contact'),
+            eq(encryptedDeks.planId, planId),
           ),
         );
 
@@ -242,21 +289,26 @@ export class EncryptionService {
   }
 
   /**
-   * Check if a DEK copy exists for a given owner/recipient pair.
+   * Check if DEK copies exist for a given owner/recipient/plan combination.
+   * Returns array of DEK entries for multi-key visibility.
    */
-  async getDekStatus(ownerId: string, recipientId: string) {
+  async getDekStatus(ownerId: string, recipientId: string, planId: string) {
     return this.db.rls(async (tx) => {
-      const [dek] = await tx
-        .select({ id: encryptedDeks.id, dekType: encryptedDeks.dekType })
+      const deks = await tx
+        .select({
+          dekType: encryptedDeks.dekType,
+          keyVersion: encryptedDeks.keyVersion,
+        })
         .from(encryptedDeks)
         .where(
           and(
             eq(encryptedDeks.ownerId, ownerId),
             eq(encryptedDeks.recipientId, recipientId),
+            eq(encryptedDeks.planId, planId),
           ),
         );
 
-      return { exists: !!dek, dekType: dek?.dekType ?? null };
+      return { exists: deks.length > 0, deks };
     });
   }
 
@@ -282,6 +334,7 @@ export class EncryptionService {
       const [dek] = await tx
         .insert(encryptedDeks)
         .values({
+          planId: dto.planId,
           ownerId: userId,
           recipientId: userId,
           dekType: 'escrow',
@@ -290,8 +343,10 @@ export class EncryptionService {
         })
         .onConflictDoUpdate({
           target: [
+            encryptedDeks.planId,
             encryptedDeks.ownerId,
             encryptedDeks.recipientId,
+            encryptedDeks.keyVersion,
             encryptedDeks.dekType,
           ],
           set: {
@@ -328,7 +383,7 @@ export class EncryptionService {
     });
 
     try {
-      // Find escrow DEK
+      // Find escrow DEK for the specified plan
       const escrowDek = await this.db.rls(async (tx) => {
         const [dek] = await tx
           .select()
@@ -338,6 +393,7 @@ export class EncryptionService {
               eq(encryptedDeks.ownerId, userId),
               eq(encryptedDeks.recipientId, userId),
               eq(encryptedDeks.dekType, 'escrow'),
+              eq(encryptedDeks.planId, dto.planId),
             ),
           );
 

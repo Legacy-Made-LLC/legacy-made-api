@@ -71,6 +71,13 @@
       "when": 1772668428641,
       "tag": "0009_flaky_valeria_richards",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1772908810584,
+      "tag": "0010_brown_crusher_hogan",
+      "breakpoints": true
     }
   ]
 }

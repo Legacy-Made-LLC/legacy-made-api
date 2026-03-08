@@ -42,8 +42,11 @@ export class DeviceLinkingService {
   }
 
   /**
-   * Deposit encrypted key material into a pending session.
+   * Deposit encrypted payload into a pending session.
    * Called by the source device after the new device scans the QR code.
+   *
+   * The payload is opaque to the server. In multi-key mode, clients typically
+   * exchange device identifiers and public keys rather than raw key material.
    */
   async depositPayload(
     sessionCode: string,
@@ -82,7 +85,10 @@ export class DeviceLinkingService {
 
   /**
    * Claim a session's payload.
-   * Called by the new device to retrieve the encrypted key material.
+   * Called by the new device to retrieve the encrypted payload.
+   *
+   * In multi-key mode, the payload typically contains device identifiers
+   * and public keys for the new device to register its own key pair.
    */
   async claimSession(sessionCode: string): Promise<{ payload: string }> {
     const userId = this.cls.requireUserId();

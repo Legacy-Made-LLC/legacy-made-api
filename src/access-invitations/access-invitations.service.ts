@@ -179,13 +179,14 @@ export class AccessInvitationsService {
         })
         .where(eq(trustedContacts.id, trustedContact.id));
 
-      // Delete own DEK copies where I am the recipient
+      // Delete own DEK copies where I am the recipient for this plan
       await tx
         .delete(encryptedDeks)
         .where(
           and(
             eq(encryptedDeks.recipientId, currentUserId),
             eq(encryptedDeks.dekType, 'contact'),
+            eq(encryptedDeks.planId, planId),
           ),
         );
 

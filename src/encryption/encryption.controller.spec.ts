@@ -9,12 +9,13 @@ describe('EncryptionController', () => {
   let controller: EncryptionController;
 
   const mockEncryptionService = {
+    setupEncryption: jest.fn(),
     registerPublicKey: jest.fn(),
-    rotatePublicKey: jest.fn(),
-    getMyPublicKey: jest.fn(),
-    getUserPublicKey: jest.fn(),
+    deleteKey: jest.fn(),
+    getMyKeys: jest.fn(),
+    getUserKeys: jest.fn(),
     storeEncryptedDek: jest.fn(),
-    getMyEncryptedDek: jest.fn(),
+    getMyEncryptedDeks: jest.fn(),
     getEncryptedDeksForOwner: jest.fn(),
     deleteContactDek: jest.fn(),
     getDekStatus: jest.fn(),

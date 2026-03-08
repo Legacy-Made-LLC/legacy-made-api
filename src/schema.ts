@@ -618,6 +618,9 @@ export const files = pgTable(
     // Upload status (for multipart/async uploads)
     uploadStatus: text('upload_status').default('pending').notNull(), // 'pending' | 'uploading' | 'complete' | 'failed'
 
+    // E2EE
+    isEncrypted: boolean('is_encrypted').notNull().default(false),
+
     // Access control
     accessLevel: text('access_level').default('private').notNull(), // 'private' | 'shareable'
     shareToken: text('share_token'), // Unique token for shareable links
@@ -767,10 +770,14 @@ export const files = pgTable(
 /**
  * User Keys table - stores ECDH P-256 public keys for E2EE key exchange
  *
- * Each user has one public key used for encrypting DEK copies during
- * key exchange with trusted contacts. Any authenticated user can read
- * any public key (they are public by definition), but only the owner
- * can insert or update their own key.
+ * Each user can have multiple public keys (one per device + recovery keys).
+ * Key types:
+ * - 'device': keys generated on user devices
+ * - 'recovery': offline recovery keys (PDF/QR/password manager)
+ *
+ * Any authenticated user can read any public key (they are public by
+ * definition), but only the owner can insert or update their own keys.
+ * The (userId, keyVersion) pair is unique across all keys for a user.
  */
 export const userKeys = pgTable(
   'user_keys',
@@ -778,10 +785,11 @@ export const userKeys = pgTable(
     id: uuid('id').defaultRandom().primaryKey(),
     userId: text('user_id')
       .notNull()
-      .unique()
       .references(() => users.id, { onDelete: 'cascade' }),
     publicKey: text('public_key').notNull(), // Base64-encoded SPKI public key
-    keyVersion: integer('key_version').notNull().default(1),
+    keyVersion: integer('key_version').notNull(), // Server-assigned, monotonically increasing per user
+    keyType: text('key_type').notNull(), // 'device' | 'recovery'
+    deviceLabel: text('device_label'), // e.g. "iPhone 15", nullable
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -791,6 +799,10 @@ export const userKeys = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
+    uniqueIndex('user_keys_user_id_key_version_idx').on(
+      table.userId,
+      table.keyVersion,
+    ),
     index('user_keys_user_id_idx').on(table.userId),
     shouldBypassRlsPolicy(),
     // Any authenticated user can read public keys (needed for key exchange)
@@ -816,19 +828,23 @@ export const userKeys = pgTable(
 /**
  * Encrypted DEKs table - stores encrypted Data Encryption Key copies
  *
- * Each plan owner has a DEK for encrypting their data. Copies of this DEK
+ * Each plan has its own DEK for encrypting data. Copies of this DEK
  * are encrypted with different recipients' public keys:
  * - 'owner': encrypted with the owner's own public key
  * - 'contact': encrypted with a trusted contact's public key
  * - 'escrow': encrypted with KMS for recovery
  *
- * UNIQUE on (owner_id, recipient_id, dek_type) allows one copy per
- * owner+recipient+type combination.
+ * UNIQUE on (plan_id, owner_id, recipient_id, key_version, dek_type)
+ * allows one copy per plan+owner+recipient+keyVersion+type combination,
+ * supporting multiple device keys per user and per-plan DEK isolation.
  */
 export const encryptedDeks = pgTable(
   'encrypted_deks',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    planId: uuid('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
     ownerId: text('owner_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -847,11 +863,14 @@ export const encryptedDeks = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
-    uniqueIndex('encrypted_deks_owner_recipient_type_idx').on(
+    uniqueIndex('encrypted_deks_plan_owner_recipient_kv_type_idx').on(
+      table.planId,
       table.ownerId,
       table.recipientId,
+      table.keyVersion,
       table.dekType,
     ),
+    index('encrypted_deks_plan_id_idx').on(table.planId),
     index('encrypted_deks_owner_id_idx').on(table.ownerId),
     index('encrypted_deks_recipient_id_idx').on(table.recipientId),
     shouldBypassRlsPolicy(),

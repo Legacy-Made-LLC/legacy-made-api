@@ -84,6 +84,7 @@ export const initiateUploadSchema = z.object({
     .int()
     .positive()
     .max(1024 * 1024 * 1024), // 1GB max
+  isEncrypted: z.boolean().optional().default(false),
 });
 
 export class InitiateUploadDto extends createZodDto(initiateUploadSchema) {}
