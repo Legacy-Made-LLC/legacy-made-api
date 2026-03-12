@@ -4,6 +4,7 @@ import { ApiConfigService } from '../config/api-config.service';
 import { DbService } from '../db/db.service';
 import { EmailService } from '../email/email.service';
 import { EncryptionService } from '../encryption/encryption.service';
+import { PushNotificationsService } from '../push-notifications/push-notifications.service';
 import { InvitationTokenService } from './invitation-token.service';
 import { TrustedContactsService } from './trusted-contacts.service';
 
@@ -31,10 +32,25 @@ describe('TrustedContactsService', () => {
     log: jest.fn(),
   };
 
+  const mockPushNotificationsService = {
+    sendToUser: jest.fn(),
+  };
+
   beforeEach(async () => {
     mockDbService = {
       rls: jest.fn(),
-      bypassRls: jest.fn(),
+      bypassRls: jest.fn().mockImplementation(async (cb) => {
+        const tx = {
+          select: jest.fn().mockReturnValue({
+            from: jest.fn().mockReturnValue({
+              where: jest.fn().mockReturnValue({
+                limit: jest.fn().mockResolvedValue([]),
+              }),
+            }),
+          }),
+        };
+        return cb(tx);
+      }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -48,6 +64,10 @@ describe('TrustedContactsService', () => {
         },
         { provide: EncryptionService, useValue: mockEncryptionService },
         { provide: ActivityLogService, useValue: mockActivityLogService },
+        {
+          provide: PushNotificationsService,
+          useValue: mockPushNotificationsService,
+        },
         {
           provide: ApiConfigService,
           useValue: { get: jest.fn(() => 'https://app.test.com') },

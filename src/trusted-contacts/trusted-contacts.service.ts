@@ -11,6 +11,7 @@ import { DbService } from '../db/db.service';
 import { EmailService } from '../email/email.service';
 import { EncryptionService } from '../encryption/encryption.service';
 import { AccessLevel } from '../lib/types/cls';
+import { PushNotificationsService } from '../push-notifications/push-notifications.service';
 import {
   trustedContacts,
   users,
@@ -35,6 +36,7 @@ export class TrustedContactsService {
     private readonly invitationTokenService: InvitationTokenService,
     private readonly activityLog: ActivityLogService,
     private readonly config: ApiConfigService,
+    private readonly pushNotifications: PushNotificationsService,
   ) {
     this.invitationBaseUrl = this.config.get('INVITATION_BASE_URL');
   }
@@ -176,6 +178,13 @@ export class TrustedContactsService {
         );
         // We don't throw here - the contact was created, email can be resent
       }
+
+      // Send push notification if the invitee is already a user
+      await this.sendInvitationPushNotification(
+        trustedContact.email,
+        ownerName,
+        planId,
+      );
 
       await this.activityLog.log(tx, {
         planId,
@@ -443,7 +452,48 @@ export class TrustedContactsService {
         invitationUrl,
       });
 
+      // Send push notification if the invitee is already a user
+      await this.sendInvitationPushNotification(
+        trustedContact.email,
+        ownerName,
+        planId,
+      );
+
       this.logger.log(`Resent invitation to ${trustedContact.email}`);
     });
+  }
+
+  /**
+   * Send a push notification to an invitee if they already have an account.
+   * Errors are logged, not thrown (fire-and-forget).
+   */
+  private async sendInvitationPushNotification(
+    inviteeEmail: string,
+    ownerName: string,
+    planId: string,
+  ): Promise<void> {
+    try {
+      const [existingUser] = await this.db.bypassRls(async (tx) => {
+        return tx
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.email, inviteeEmail))
+          .limit(1);
+      });
+
+      if (existingUser) {
+        await this.pushNotifications.sendToUser(
+          existingUser.id,
+          "You've Been Invited",
+          `${ownerName} invited you as a trusted contact.`,
+          { type: 'invitation_received', planId },
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to send invitation push notification to ${inviteeEmail}`,
+        error,
+      );
+    }
   }
 }
