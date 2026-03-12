@@ -830,9 +830,10 @@ export const userKeys = pgTable(
  *
  * Each plan has its own DEK for encrypting data. Copies of this DEK
  * are encrypted with different recipients' public keys:
- * - 'owner': encrypted with the owner's own public key
+ * - 'device': encrypted with one of the owner's device public keys
+ * - 'recovery': encrypted with the owner's recovery public key
  * - 'contact': encrypted with a trusted contact's public key
- * - 'escrow': encrypted with KMS for recovery
+ * - 'escrow': encrypted with KMS for recovery (created only via /encryption/escrow)
  *
  * UNIQUE on (plan_id, owner_id, recipient_id, key_version, dek_type)
  * allows one copy per plan+owner+recipient+keyVersion+type combination,
@@ -851,7 +852,7 @@ export const encryptedDeks = pgTable(
     recipientId: text('recipient_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    dekType: text('dek_type').notNull(), // 'owner' | 'contact' | 'escrow'
+    dekType: text('dek_type').notNull(), // 'device' | 'recovery' | 'contact' | 'escrow'
     encryptedDek: text('encrypted_dek').notNull(), // Base64-encoded ciphertext
     keyVersion: integer('key_version').notNull(), // Matches recipient's key version used
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -875,11 +876,12 @@ export const encryptedDeks = pgTable(
     index('encrypted_deks_recipient_id_idx').on(table.recipientId),
     shouldBypassRlsPolicy(),
     // Owner can manage all DEK copies for their data
+    // INSERT also requires that the plan belongs to the owner (prevents orphaned DEKs)
     pgPolicy('encrypted_deks_owner', {
       for: 'all',
       to: 'public',
       using: isCurrentUser(table.ownerId),
-      withCheck: isCurrentUser(table.ownerId),
+      withCheck: sql`${isCurrentUser(table.ownerId)} AND ${userOwnsPlan(table.planId)}`,
     }),
     // Recipients can read their own DEK copy
     pgPolicy('encrypted_deks_recipient_read', {
@@ -900,6 +902,14 @@ export const encryptedDeks = pgTable(
  * Logs all recovery attempts with IP address, user agent, and details
  * for security auditing. Users can view their own recovery history.
  */
+export type KeyRecoveryEventType =
+  | 'recovery_key_registered'
+  | 'recovery_key_deregistered'
+  | 'escrow_revoked'
+  | 'escrow_recovery_initiated'
+  | 'escrow_recovery_completed'
+  | 'escrow_recovery_failed';
+
 export const keyRecoveryEvents = pgTable(
   'key_recovery_events',
   {
@@ -907,7 +917,7 @@ export const keyRecoveryEvents = pgTable(
     userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    eventType: text('event_type').notNull(), // 'recovery_initiated' | 'recovery_completed' | 'recovery_failed'
+    eventType: text('event_type').notNull().$type<KeyRecoveryEventType>(), // see KeyRecoveryEventType
     ipAddress: text('ip_address'),
     userAgent: text('user_agent'),
     details: jsonb('details'),

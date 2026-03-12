@@ -15,10 +15,12 @@ import {
   keyRecoveryEvents,
   plans,
   users,
+  type KeyRecoveryEventType,
 } from '../schema';
 import {
   RegisterPublicKeyDto,
   StoreEncryptedDekDto,
+  RotateDeksDto,
   EnableEscrowDto,
   InitiateRecoveryDto,
   SetupEncryptionDto,
@@ -75,7 +77,7 @@ export class EncryptionService {
           planId: dto.planId,
           ownerId: userId,
           recipientId: userId,
-          dekType: 'owner',
+          dekType: 'device',
           encryptedDek: dto.encryptedDek,
           keyVersion: 1,
         })
@@ -119,23 +121,46 @@ export class EncryptionService {
         })
         .returning();
 
+      if (dto.keyType === 'recovery') {
+        await tx.insert(keyRecoveryEvents).values({
+          userId,
+          eventType: 'recovery_key_registered' satisfies KeyRecoveryEventType,
+          ipAddress: this.cls.getIpAddress(),
+          userAgent: this.cls.getUserAgent(),
+          details: { keyVersion: nextVersion, deviceLabel: dto.deviceLabel },
+        });
+      }
+
       return key;
     });
   }
 
   /**
-   * Delete a key by version for the current user.
+   * Delete a device key by version for the current user.
+   * Only device keys can be deleted — recovery keys must be deregistered
+   * through the DEK management endpoints (DELETE /encryption/deks/by-type).
    * Also deletes all encrypted DEK copies for this key version in the same transaction.
    */
   async deleteKey(keyVersion: number) {
     const userId = this.cls.requireUserId();
 
     return this.db.rls(async (tx) => {
-      await tx
+      const deleted = await tx
         .delete(userKeys)
         .where(
-          and(eq(userKeys.userId, userId), eq(userKeys.keyVersion, keyVersion)),
+          and(
+            eq(userKeys.userId, userId),
+            eq(userKeys.keyVersion, keyVersion),
+            eq(userKeys.keyType, 'device'),
+          ),
+        )
+        .returning();
+
+      if (deleted.length === 0) {
+        throw new NotFoundException(
+          'Device key not found. Only device keys can be deleted via this endpoint.',
         );
+      }
 
       await tx
         .delete(encryptedDeks)
@@ -266,23 +291,114 @@ export class EncryptionService {
   }
 
   /**
-   * Delete a contact's DEK copy (revocation). Owner only.
-   * Scoped to a specific plan.
+   * Atomic DEK rotation for a plan. Deletes all existing non-escrow DEK copies
+   * owned by the current user for the given plan, then inserts the new set.
+   * Escrow copies are left untouched (handled separately via /escrow endpoint).
    */
-  async deleteContactDek(recipientId: string, planId: string) {
+  async rotateDeks(dto: RotateDeksDto) {
     const ownerId = this.cls.requireUserId();
 
     return this.db.rls(async (tx) => {
+      // Delete all existing non-escrow DEK copies for this plan
       await tx
         .delete(encryptedDeks)
         .where(
           and(
             eq(encryptedDeks.ownerId, ownerId),
-            eq(encryptedDeks.recipientId, recipientId),
-            eq(encryptedDeks.dekType, 'contact'),
-            eq(encryptedDeks.planId, planId),
+            eq(encryptedDeks.planId, dto.planId),
+            sql`${encryptedDeks.dekType} != 'escrow'`,
           ),
         );
+
+      // Insert all new DEK copies
+      const inserted = await tx
+        .insert(encryptedDeks)
+        .values(
+          dto.newDeks.map((dek) => ({
+            planId: dto.planId,
+            ownerId,
+            recipientId: dek.recipientId,
+            dekType: dek.dekType,
+            encryptedDek: dek.encryptedDek,
+            keyVersion: dek.keyVersion,
+          })),
+        )
+        .returning();
+
+      // Log recovery events for rotation: deregister old + register new
+      const hasRecoveryDeks = dto.newDeks.some(
+        (dek) => dek.dekType === 'recovery',
+      );
+      if (hasRecoveryDeks) {
+        const recoveryKeyVersions = dto.newDeks
+          .filter((dek) => dek.dekType === 'recovery')
+          .map((dek) => dek.keyVersion);
+
+        await tx.insert(keyRecoveryEvents).values([
+          {
+            userId: ownerId,
+            eventType:
+              'recovery_key_deregistered' satisfies KeyRecoveryEventType,
+            ipAddress: this.cls.getIpAddress(),
+            userAgent: this.cls.getUserAgent(),
+            details: { planId: dto.planId, reason: 'dek_rotation' },
+          },
+          {
+            userId: ownerId,
+            eventType: 'recovery_key_registered' satisfies KeyRecoveryEventType,
+            ipAddress: this.cls.getIpAddress(),
+            userAgent: this.cls.getUserAgent(),
+            details: {
+              planId: dto.planId,
+              keyVersions: recoveryKeyVersions,
+              reason: 'dek_rotation',
+            },
+          },
+        ]);
+      }
+
+      return inserted;
+    });
+  }
+
+  /**
+   * Delete encrypted DEK copies by type and plan, optionally filtered by key version.
+   * Does not touch the user_keys table.
+   */
+  async deleteDeks(
+    planId: string,
+    dekType: string,
+    recipientId?: string,
+    keyVersion?: number,
+  ) {
+    const ownerId = this.cls.requireUserId();
+
+    return this.db.rls(async (tx) => {
+      const conditions = [
+        eq(encryptedDeks.ownerId, ownerId),
+        eq(encryptedDeks.planId, planId),
+        eq(encryptedDeks.dekType, dekType),
+      ];
+
+      if (recipientId) {
+        conditions.push(eq(encryptedDeks.recipientId, recipientId));
+      }
+
+      if (keyVersion !== undefined) {
+        conditions.push(eq(encryptedDeks.keyVersion, keyVersion));
+      }
+
+      await tx.delete(encryptedDeks).where(and(...conditions));
+
+      if (dekType === 'recovery') {
+        await tx.insert(keyRecoveryEvents).values({
+          userId: ownerId,
+          eventType: 'recovery_key_deregistered' satisfies KeyRecoveryEventType,
+          ipAddress: this.cls.getIpAddress(),
+          userAgent: this.cls.getUserAgent(),
+          details: { planId, keyVersion },
+        });
+      }
 
       return { deleted: true };
     });
@@ -330,7 +446,7 @@ export class EncryptionService {
     // Zero out the plaintext buffer
     dekBuffer.fill(0);
 
-    return this.db.rls(async (tx) => {
+    const result = await this.db.rls(async (tx) => {
       const [dek] = await tx
         .insert(encryptedDeks)
         .values({
@@ -357,6 +473,58 @@ export class EncryptionService {
 
       return { id: dek.id, enabled: true };
     });
+
+    // Send email notification (fire and forget)
+    this.sendEscrowEnabledNotification(userId).catch((error) => {
+      this.logger.error('Failed to send escrow enabled notification', error);
+    });
+
+    return result;
+  }
+
+  /**
+   * Revoke KMS escrow for a plan.
+   * Deletes the escrow DEK copy and logs an audit event.
+   */
+  async revokeEscrow(planId: string) {
+    const userId = this.cls.requireUserId();
+
+    const result = await this.db.rls(async (tx) => {
+      const deleted = await tx
+        .delete(encryptedDeks)
+        .where(
+          and(
+            eq(encryptedDeks.ownerId, userId),
+            eq(encryptedDeks.recipientId, userId),
+            eq(encryptedDeks.dekType, 'escrow'),
+            eq(encryptedDeks.planId, planId),
+          ),
+        )
+        .returning();
+
+      if (deleted.length === 0) {
+        throw new NotFoundException(
+          'No escrow DEK found for this plan. Escrow not enabled.',
+        );
+      }
+
+      await tx.insert(keyRecoveryEvents).values({
+        userId,
+        eventType: 'escrow_revoked' satisfies KeyRecoveryEventType,
+        ipAddress: this.cls.getIpAddress(),
+        userAgent: this.cls.getUserAgent(),
+        details: { planId },
+      });
+
+      return { revoked: true };
+    });
+
+    // Send email notification (fire and forget)
+    this.sendEscrowRevokedNotification(userId).catch((error) => {
+      this.logger.error('Failed to send escrow revoked notification', error);
+    });
+
+    return result;
   }
 
   /**
@@ -364,20 +532,16 @@ export class EncryptionService {
    * Decrypts the escrow DEK via KMS and returns the plaintext over TLS.
    * Logs the event and sends email notification.
    */
-  async initiateRecovery(
-    dto: InitiateRecoveryDto,
-    ipAddress: string,
-    userAgent: string,
-  ) {
+  async initiateRecovery(dto: InitiateRecoveryDto) {
     const userId = this.cls.requireUserId();
 
     // Log recovery initiation
     await this.db.rls(async (tx) => {
       await tx.insert(keyRecoveryEvents).values({
         userId,
-        eventType: 'recovery_initiated',
-        ipAddress,
-        userAgent,
+        eventType: 'escrow_recovery_initiated' satisfies KeyRecoveryEventType,
+        ipAddress: this.cls.getIpAddress(),
+        userAgent: this.cls.getUserAgent(),
         details: { newPublicKey: dto.newPublicKey },
       });
     });
@@ -418,18 +582,16 @@ export class EncryptionService {
       await this.db.rls(async (tx) => {
         await tx.insert(keyRecoveryEvents).values({
           userId,
-          eventType: 'recovery_completed',
-          ipAddress,
-          userAgent,
+          eventType: 'escrow_recovery_completed' satisfies KeyRecoveryEventType,
+          ipAddress: this.cls.getIpAddress(),
+          userAgent: this.cls.getUserAgent(),
         });
       });
 
       // Send email notification (fire and forget)
-      this.sendRecoveryNotification(userId, ipAddress, userAgent).catch(
-        (error) => {
-          this.logger.error('Failed to send recovery notification', error);
-        },
-      );
+      this.sendRecoveryNotification(userId).catch((error) => {
+        this.logger.error('Failed to send recovery notification', error);
+      });
 
       return { dekPlaintext: dekPlaintextBase64 };
     } catch (error) {
@@ -438,9 +600,9 @@ export class EncryptionService {
         await this.db.rls(async (tx) => {
           await tx.insert(keyRecoveryEvents).values({
             userId,
-            eventType: 'recovery_failed',
-            ipAddress,
-            userAgent,
+            eventType: 'escrow_recovery_failed' satisfies KeyRecoveryEventType,
+            ipAddress: this.cls.getIpAddress(),
+            userAgent: this.cls.getUserAgent(),
             details: {
               error: error instanceof Error ? error.message : 'Unknown error',
             },
@@ -511,11 +673,7 @@ export class EncryptionService {
   // Private helpers
   // =========================================================================
 
-  private async sendRecoveryNotification(
-    userId: string,
-    ipAddress: string,
-    userAgent: string,
-  ): Promise<void> {
+  private async sendRecoveryNotification(userId: string): Promise<void> {
     // Look up user email via bypassRls (we're in an async context)
     const user = await this.db.bypassRls(async (tx) => {
       const [u] = await tx
@@ -535,9 +693,55 @@ export class EncryptionService {
     await this.email.sendRecoveryNotification({
       to: user.email,
       firstName: user.firstName ?? 'there',
-      ipAddress,
-      userAgent,
+      ipAddress: this.cls.getIpAddress(),
+      userAgent: this.cls.getUserAgent(),
       recoveredAt: new Date(),
+    });
+  }
+
+  private async sendEscrowEnabledNotification(userId: string): Promise<void> {
+    const user = await this.db.bypassRls(async (tx) => {
+      const [u] = await tx
+        .select({ email: users.email, firstName: users.firstName })
+        .from(users)
+        .where(eq(users.id, userId));
+      return u;
+    });
+
+    if (!user?.email) {
+      this.logger.warn(
+        `Cannot send escrow enabled notification: no email for user ${userId}`,
+      );
+      return;
+    }
+
+    await this.email.sendEscrowEnabledNotification({
+      to: user.email,
+      firstName: user.firstName ?? 'there',
+      enabledAt: new Date(),
+    });
+  }
+
+  private async sendEscrowRevokedNotification(userId: string): Promise<void> {
+    const user = await this.db.bypassRls(async (tx) => {
+      const [u] = await tx
+        .select({ email: users.email, firstName: users.firstName })
+        .from(users)
+        .where(eq(users.id, userId));
+      return u;
+    });
+
+    if (!user?.email) {
+      this.logger.warn(
+        `Cannot send escrow revoked notification: no email for user ${userId}`,
+      );
+      return;
+    }
+
+    await this.email.sendEscrowRevokedNotification({
+      to: user.email,
+      firstName: user.firstName ?? 'there',
+      revokedAt: new Date(),
     });
   }
 }

@@ -75,7 +75,6 @@ export class TrustedContactsService {
           .set({
             ...dto,
             accessStatus: 'pending',
-            clerkUserId: null,
             acceptedAt: null,
             declinedAt: null,
             revokedAt: null,
@@ -162,22 +161,42 @@ export class TrustedContactsService {
   }
 
   /**
-   * Get all trusted contacts for a plan
+   * Get all trusted contacts for a plan, with dekShared status.
    */
-  async findAll(planId: string): Promise<TrustedContact[]> {
+  async findAll(planId: string) {
     return this.db.rls(async (tx) => {
-      return tx
+      const contacts = await tx
         .select()
         .from(trustedContacts)
         .where(eq(trustedContacts.planId, planId))
         .orderBy(trustedContacts.createdAt);
+
+      // Batch-check which contacts have a DEK copy shared with them
+      const dekCopies = await tx
+        .select({ recipientId: encryptedDeks.recipientId })
+        .from(encryptedDeks)
+        .where(
+          and(
+            eq(encryptedDeks.planId, planId),
+            eq(encryptedDeks.dekType, 'contact'),
+          ),
+        );
+
+      const recipientsWithDek = new Set(dekCopies.map((d) => d.recipientId));
+
+      return contacts.map((contact) => ({
+        ...contact,
+        dekShared: contact.clerkUserId
+          ? recipientsWithDek.has(contact.clerkUserId)
+          : false,
+      }));
     });
   }
 
   /**
-   * Get a specific trusted contact
+   * Get a specific trusted contact, with dekShared status.
    */
-  async findOne(id: string, planId: string): Promise<TrustedContact> {
+  async findOne(id: string, planId: string) {
     return this.db.rls(async (tx) => {
       const [trustedContact] = await tx
         .select()
@@ -190,7 +209,23 @@ export class TrustedContactsService {
         throw new NotFoundException('Trusted contact not found');
       }
 
-      return trustedContact;
+      let dekShared = false;
+      if (trustedContact.clerkUserId) {
+        const [dekCopy] = await tx
+          .select({ id: encryptedDeks.id })
+          .from(encryptedDeks)
+          .where(
+            and(
+              eq(encryptedDeks.planId, planId),
+              eq(encryptedDeks.recipientId, trustedContact.clerkUserId),
+              eq(encryptedDeks.dekType, 'contact'),
+            ),
+          )
+          .limit(1);
+        dekShared = !!dekCopy;
+      }
+
+      return { ...trustedContact, dekShared };
     });
   }
 

@@ -4,6 +4,7 @@ import { APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
+import { RequestContextInterceptor } from './lib/request-context.interceptor';
 import { AuthModule } from './auth/auth.module';
 import { configSchema } from './config';
 import { ApiConfigModule } from './config/api-config.module';
@@ -70,6 +71,10 @@ import { EncryptionModule } from './encryption/encryption.module';
     {
       provide: APP_PIPE,
       useClass: ZodValidationPipe,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: RequestContextInterceptor,
     },
     {
       provide: APP_INTERCEPTOR,

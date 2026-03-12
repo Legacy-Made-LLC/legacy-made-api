@@ -9,4 +9,8 @@ export interface ApiClsStore extends ClsStore {
   planAccessLevel?: AccessLevel;
   /** The plan owner's user ID. Set by PlanAccessGuard for all plan-scoped requests. */
   planOwnerId?: string;
+  /** Client IP address. Set by RequestContextInterceptor. */
+  ipAddress?: string;
+  /** Client user-agent string. Set by RequestContextInterceptor. */
+  userAgent?: string;
 }

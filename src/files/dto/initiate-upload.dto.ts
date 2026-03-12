@@ -61,14 +61,14 @@ function sanitizeFilename(filename: string): string {
  */
 export const initiateUploadSchema = z.object({
   role: z.string().max(64).optional().default('primary'),
-  parentFileId: z.string().uuid().optional(),
+  parentFileId: z.uuid().optional(),
   filename: z
     .string()
     .min(1)
     .max(255)
     .transform(sanitizeFilename)
     .refine((name) => name.length > 0, {
-      message: 'Filename cannot be empty after sanitization',
+      error: 'Filename cannot be empty after sanitization',
     }),
   mimeType: z
     .string()
@@ -77,7 +77,7 @@ export const initiateUploadSchema = z.object({
         ALLOWED_MIME_TYPES.includes(
           type as (typeof ALLOWED_MIME_TYPES)[number],
         ),
-      { message: 'File type not allowed' },
+      { error: 'File type not allowed' },
     ),
   sizeBytes: z
     .number()

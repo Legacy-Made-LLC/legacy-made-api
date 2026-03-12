@@ -58,6 +58,9 @@ export const configSchema = z.object({
     .optional()
     .default(100 * 1024 * 1024), // 100MB
 
+  // SUPPORT
+  SUPPORT_EMAIL: z.email().default('support@mylegacymade.com'),
+
   // FEATURE FLAGS
   GRANT_LIFETIME_TO_NEW_USERS: z
     .stringbool({

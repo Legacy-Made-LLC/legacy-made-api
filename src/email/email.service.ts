@@ -10,6 +10,8 @@ import { AccessRevokedByContactEmail } from './templates/access-revoked-by-conta
 import { InvitationImmediateEditEmail } from './templates/invitation-immediate-edit';
 import { InvitationImmediateViewEmail } from './templates/invitation-immediate-view';
 import { InvitationUponPassingEmail } from './templates/invitation-upon-passing';
+import { EscrowEnabledEmail } from './templates/escrow-enabled';
+import { EscrowRevokedEmail } from './templates/escrow-revoked';
 import { KeyRecoveryEmail } from './templates/key-recovery';
 
 export interface SendInvitationEmailData {
@@ -46,9 +48,21 @@ export interface SendAccessRevokedEmailData {
 export interface SendRecoveryNotificationData {
   to: string;
   firstName: string;
-  ipAddress: string;
-  userAgent: string;
+  ipAddress?: string;
+  userAgent?: string;
   recoveredAt: Date;
+}
+
+export interface SendEscrowEnabledEmailData {
+  to: string;
+  firstName: string;
+  enabledAt: Date;
+}
+
+export interface SendEscrowRevokedEmailData {
+  to: string;
+  firstName: string;
+  revokedAt: Date;
 }
 
 export interface UpdateSubscriberPropertiesData {
@@ -66,12 +80,14 @@ export class EmailService {
   private readonly loops: LoopsClient;
   private readonly fromInvite: string;
   private readonly fromUpdates: string;
+  private readonly supportEmail: string;
 
   constructor(private readonly config: ApiConfigService) {
     this.resend = new Resend(this.config.get('RESEND_API_KEY'));
     const name = this.config.get('RESEND_FROM_NAME');
     this.fromInvite = `${name} <${this.config.get('RESEND_FROM_EMAIL_INVITE')}>`;
     this.fromUpdates = `${name} <${this.config.get('RESEND_FROM_EMAIL_UPDATES')}>`;
+    this.supportEmail = this.config.get('SUPPORT_EMAIL');
 
     this.loops = new LoopsClient(this.config.get('LOOPS_API_KEY'));
   }
@@ -119,6 +135,7 @@ export class EmailService {
 
       await this.resend.emails.send({
         from: this.fromInvite,
+        replyTo: this.supportEmail,
         to: data.to,
         subject,
         html: emailHtml,
@@ -147,6 +164,7 @@ export class EmailService {
 
       await this.resend.emails.send({
         from: this.fromUpdates,
+        replyTo: this.supportEmail,
         to: data.to,
         subject: `${data.contactName} accepted your invitation to access your Legacy Made plan`,
         html: emailHtml,
@@ -177,6 +195,7 @@ export class EmailService {
 
       await this.resend.emails.send({
         from: this.fromUpdates,
+        replyTo: this.supportEmail,
         to: data.to,
         subject: `${data.contactName} declined your invitation to access your Legacy Made plan`,
         html: emailHtml,
@@ -209,6 +228,7 @@ export class EmailService {
 
       await this.resend.emails.send({
         from: this.fromUpdates,
+        replyTo: this.supportEmail,
         to: data.to,
         subject: `${data.contactName} has removed their access to your Legacy Made plan`,
         html: emailHtml,
@@ -237,11 +257,13 @@ export class EmailService {
           ipAddress: data.ipAddress,
           userAgent: data.userAgent,
           recoveredAt: data.recoveredAt,
+          supportEmail: this.supportEmail,
         }),
       );
 
       await this.resend.emails.send({
         from: this.fromUpdates,
+        replyTo: this.supportEmail,
         to: data.to,
         subject: 'Key recovery performed on your Legacy Made account',
         html: emailHtml,
@@ -251,6 +273,72 @@ export class EmailService {
     } catch (error) {
       this.logger.error(
         `Failed to send recovery notification to ${data.to}`,
+        error,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Notify user that KMS escrow recovery was enabled on their account
+   */
+  async sendEscrowEnabledNotification(
+    data: SendEscrowEnabledEmailData,
+  ): Promise<void> {
+    try {
+      const emailHtml = await render(
+        EscrowEnabledEmail({
+          firstName: data.firstName,
+          enabledAt: data.enabledAt,
+          supportEmail: this.supportEmail,
+        }),
+      );
+
+      await this.resend.emails.send({
+        from: this.fromUpdates,
+        replyTo: this.supportEmail,
+        to: data.to,
+        subject: 'Legacy Made recovery has been turned on',
+        html: emailHtml,
+      });
+
+      this.logger.log(`Escrow enabled notification sent to ${data.to}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send escrow enabled notification to ${data.to}`,
+        error,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Notify user that KMS escrow recovery was disabled on their account
+   */
+  async sendEscrowRevokedNotification(
+    data: SendEscrowRevokedEmailData,
+  ): Promise<void> {
+    try {
+      const emailHtml = await render(
+        EscrowRevokedEmail({
+          firstName: data.firstName,
+          revokedAt: data.revokedAt,
+          supportEmail: this.supportEmail,
+        }),
+      );
+
+      await this.resend.emails.send({
+        from: this.fromUpdates,
+        replyTo: this.supportEmail,
+        to: data.to,
+        subject: 'Legacy Made recovery has been turned off',
+        html: emailHtml,
+      });
+
+      this.logger.log(`Escrow revoked notification sent to ${data.to}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send escrow revoked notification to ${data.to}`,
         error,
       );
       throw error;

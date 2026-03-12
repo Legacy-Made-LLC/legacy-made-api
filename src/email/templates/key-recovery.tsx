@@ -1,12 +1,13 @@
-import { Text } from '@react-email/components';
+import { Link, Text } from '@react-email/components';
 import * as React from 'react';
-import { BaseEmail, paragraph, secondaryText } from './base';
+import { BaseEmail, linkStyle, paragraph, secondaryText } from './base';
 
 interface KeyRecoveryEmailProps {
   firstName: string;
-  ipAddress: string;
-  userAgent: string;
+  ipAddress?: string;
+  userAgent?: string;
   recoveredAt: Date;
+  supportEmail: string;
 }
 
 export const KeyRecoveryEmail = ({
@@ -14,6 +15,7 @@ export const KeyRecoveryEmail = ({
   ipAddress,
   userAgent,
   recoveredAt,
+  supportEmail,
 }: KeyRecoveryEmailProps) => {
   return (
     <BaseEmail
@@ -36,8 +38,12 @@ export const KeyRecoveryEmail = ({
         {recoveredAt.toLocaleTimeString()}
       </Text>
       <Text style={paragraph}>
-        If you did not initiate this recovery, please secure your account
-        immediately by changing your password and contacting support.
+        If you did not initiate this recovery, please contact support
+        immediately at{' '}
+        <Link href={`mailto:${supportEmail}`} style={linkStyle}>
+          {supportEmail}
+        </Link>
+        .
       </Text>
     </BaseEmail>
   );
@@ -48,6 +54,7 @@ KeyRecoveryEmail.PreviewProps = {
   ipAddress: '192.168.1.1',
   userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)',
   recoveredAt: new Date('2026-03-04T14:30:00Z'),
+  supportEmail: 'support@mylegacymade.com',
 } satisfies KeyRecoveryEmailProps;
 
 export default KeyRecoveryEmail;

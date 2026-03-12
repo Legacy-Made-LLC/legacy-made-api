@@ -17,7 +17,7 @@ describe('EncryptionController', () => {
     storeEncryptedDek: jest.fn(),
     getMyEncryptedDeks: jest.fn(),
     getEncryptedDeksForOwner: jest.fn(),
-    deleteContactDek: jest.fn(),
+    deleteDeks: jest.fn(),
     getDekStatus: jest.fn(),
     enableEscrow: jest.fn(),
     initiateRecovery: jest.fn(),

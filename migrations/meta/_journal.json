@@ -78,6 +78,13 @@
       "when": 1772908810584,
       "tag": "0010_brown_crusher_hogan",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1773274831530,
+      "tag": "0011_hard_omega_flight",
+      "breakpoints": true
     }
   ]
 }

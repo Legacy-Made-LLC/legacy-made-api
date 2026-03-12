@@ -2,7 +2,7 @@ import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 export const initiateRecoverySchema = z.object({
-  planId: z.string().uuid(),
+  planId: z.uuid(),
   newPublicKey: z.string().min(1), // Base64-encoded new public key
 });
 

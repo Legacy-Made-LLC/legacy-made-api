@@ -110,6 +110,33 @@ export class EntriesController {
 
 Most endpoints accepting a JSON request body should use DTO validation. Modules with CRUD endpoints should have a `dto` subdirectory containing Zod-based DTOs.
 
+**This project uses Zod v4.** Use the current top-level APIs — the old `z.string().xxx()` format validators are deprecated:
+
+| Deprecated (v3) | Use instead (v4) |
+|---|---|
+| `z.string().uuid()` | `z.uuid()` (strict RFC 9562) or `z.guid()` (permissive) |
+| `z.string().email()` | `z.email()` |
+| `z.string().url()` | `z.url()` |
+| `z.string().datetime()` | `z.iso.datetime()` |
+| `z.string().date()` | `z.iso.date()` |
+| `z.string().time()` | `z.iso.time()` |
+| `z.string().duration()` | `z.iso.duration()` |
+| `z.string().ip()` | `z.ipv4()` or `z.ipv6()` |
+| `z.string().base64()` | `z.base64()` |
+| `z.string().emoji()` | `z.emoji()` |
+| `z.string().nanoid()` | `z.nanoid()` |
+| `z.string().cuid()` | `z.cuid()` |
+| `z.string().cuid2()` | `z.cuid2()` |
+| `z.string().ulid()` | `z.ulid()` |
+| `z.nativeEnum(Enum)` | `z.enum(Enum)` |
+| `z.object({}).strict()` | `z.strictObject({})` |
+| `z.object({}).passthrough()` | `z.looseObject({})` |
+| `A.merge(B)` | `A.extend(B.shape)` |
+| `{ message: "..." }` (in `.min()`, etc.) | `{ error: "..." }` |
+| `z.record(valueSchema)` (single arg) | `z.record(z.string(), valueSchema)` |
+
+Non-format string methods (`.min()`, `.max()`, `.length()`, `.regex()`, `.includes()`, `.startsWith()`, `.endsWith()`, `.trim()`) remain unchanged and are fine to use on `z.string()`.
+
 **Structure:** `src/<module>/dto/<name>.dto.ts`
 
 **Pattern:**
@@ -255,6 +282,17 @@ async create(dto: CreatePlanDto) {
   return plan;
 }
 ```
+
+## Security & Encryption
+
+For all decisions related to E2EE, key management, DEK architecture, and security design, refer to [`docs/security-and-encryption.md`](docs/security-and-encryption.md). That document is the authoritative reference for:
+
+- Multi-key model (device + recovery key types, per-user key versioning)
+- Per-plan DEK isolation and envelope encryption pattern
+- KMS escrow and account recovery flows
+- Device linking protocol
+- API endpoint reference for the `/encryption` controller
+- Layered access control (Clerk → RLS → Signed URLs → E2EE → KMS)
 
 ## Architecture
 

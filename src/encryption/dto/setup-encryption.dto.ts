@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 export const setupEncryptionSchema = z.object({
   publicKey: z.string().min(1),
-  planId: z.string().uuid(),
+  planId: z.uuid(),
   encryptedDek: z.string().min(1),
   deviceLabel: z.string().max(100).optional(),
 });

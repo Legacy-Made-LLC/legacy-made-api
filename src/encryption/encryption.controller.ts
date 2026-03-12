@@ -7,17 +7,19 @@ import {
   ParseIntPipe,
   ParseUUIDPipe,
   Post,
+  Put,
   Query,
-  Req,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
-import { type Request } from 'express';
 import { EncryptionService } from './encryption.service';
 import { DeviceLinkingService } from './device-linking.service';
 import {
   RegisterPublicKeyDto,
   StoreEncryptedDekDto,
+  RotateDeksDto,
+  DeleteDeksQueryDto,
+  GetDeksQueryDto,
   EnableEscrowDto,
   InitiateRecoveryDto,
   SetupEncryptionDto,
@@ -80,6 +82,26 @@ export class EncryptionController {
     return this.encryptionService.storeEncryptedDek(dto);
   }
 
+  @Put('deks')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    short: { limit: 3, ttl: 1000 },
+    medium: { limit: 10, ttl: 60000 },
+  })
+  rotateDeks(@Body() dto: RotateDeksDto) {
+    return this.encryptionService.rotateDeks(dto);
+  }
+
+  @Delete('deks')
+  deleteDeks(@Query() query: DeleteDeksQueryDto) {
+    return this.encryptionService.deleteDeks(
+      query.planId,
+      query.dekType,
+      query.recipientId,
+      query.keyVersion,
+    );
+  }
+
   @Get('deks/mine/:ownerId')
   getMyEncryptedDeks(
     @Param('ownerId') ownerId: string,
@@ -89,16 +111,8 @@ export class EncryptionController {
   }
 
   @Get('deks')
-  getEncryptedDeksForOwner(@Query('planId') planId?: string) {
-    return this.encryptionService.getEncryptedDeksForOwner(planId);
-  }
-
-  @Delete('deks/:recipientId')
-  deleteContactDek(
-    @Param('recipientId') recipientId: string,
-    @Query('planId', ParseUUIDPipe) planId: string,
-  ) {
-    return this.encryptionService.deleteContactDek(recipientId, planId);
+  getEncryptedDeksForOwner(@Query() query: GetDeksQueryDto) {
+    return this.encryptionService.getEncryptedDeksForOwner(query.planId);
   }
 
   @Get('deks/status/:ownerId/:recipientId')
@@ -124,19 +138,24 @@ export class EncryptionController {
     return this.encryptionService.enableEscrow(dto);
   }
 
+  @Delete('escrow')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    short: { limit: 1, ttl: 10000 },
+    medium: { limit: 3, ttl: 60000 },
+  })
+  revokeEscrow(@Query('planId', ParseUUIDPipe) planId: string) {
+    return this.encryptionService.revokeEscrow(planId);
+  }
+
   @Post('recovery')
   @UseGuards(ThrottlerGuard)
   @Throttle({
     short: { limit: 1, ttl: 10000 },
     medium: { limit: 3, ttl: 60000 },
   })
-  initiateRecovery(@Body() dto: InitiateRecoveryDto, @Req() req: Request) {
-    const ipAddress =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
-      req.ip ??
-      'unknown';
-    const userAgent = req.headers['user-agent'] ?? 'unknown';
-    return this.encryptionService.initiateRecovery(dto, ipAddress, userAgent);
+  initiateRecovery(@Body() dto: InitiateRecoveryDto) {
+    return this.encryptionService.initiateRecovery(dto);
   }
 
   @Get('recovery/events')
