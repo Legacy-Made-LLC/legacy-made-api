@@ -8,3 +8,6 @@ export * from './initiate-recovery.dto';
 export * from './setup-encryption.dto';
 export * from './deposit-payload.dto';
 export * from './claim-session.dto';
+export * from './get-keys-by-email-query.dto';
+export * from './get-my-keys-query.dto';
+export * from './get-user-keys-query.dto';

@@ -1,8 +1,8 @@
 import { createZodDto } from 'nestjs-zod';
-import { createTrustedContactSchema } from './create-trusted-contact.dto';
+import { contactFieldsSchema } from './create-trusted-contact.dto';
 
 // Allow updating all fields except email (email is immutable once set)
-export const updateTrustedContactSchema = createTrustedContactSchema
+export const updateTrustedContactSchema = contactFieldsSchema
   .omit({ email: true })
   .partial();
 

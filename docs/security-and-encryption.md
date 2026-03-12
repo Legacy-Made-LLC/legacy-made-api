@@ -124,7 +124,7 @@ When this feature is introduced, it will require Legacy Made to hold an escrow k
 | **Auth** | Clerk — OTP-based, passwordless. No stable secret for key derivation. |
 | **Storage** | Cloudflare R2 — images, documents, video (MP4). Presigned URLs for access control. |
 | **Mobile** | Expo (React Native) — iOS Keychain / Android Keystore for secure enclave storage |
-| **Key Management** | AWS KMS (symmetric CMK) — holds Legacy Made's recovery key only |
+| **Key Management** | AWS KMS (RSA_4096 asymmetric key for escrow, symmetric CMK retained for other uses) — holds Legacy Made's recovery key only |
 | **Video** | No managed platform. MP4 stored in R2, played natively on device. |
 
 ---
@@ -200,9 +200,7 @@ Three backup mechanisms are available, presented to the user during onboarding:
 
 ### Option A — Legacy Made Escrow (Optional Opt-In)
 
-The plan's DEK is sent to the server as base64-encoded plaintext over TLS. The server encrypts it with AWS KMS and stores the ciphertext in Neon as a DEK copy with `dekType: 'escrow'` and `keyVersion: 0`.
-
-The plaintext buffer is zeroed in server memory immediately after encryption.
+The client fetches the KMS RSA_4096 public key via `GET /encryption/escrow/public-key`, encrypts the DEK locally using RSA-OAEP-SHA256, and sends the ciphertext to the server via `POST /encryption/escrow`. The server stores the ciphertext directly in Neon as a DEK copy with `dekType: 'escrow'` and `keyVersion: 0`. The server never sees the plaintext DEK during enrollment — only during recovery (when KMS decrypts with the private key that never leaves hardware).
 
 **Disclosure shown to user at opt-in:**
 
@@ -305,38 +303,52 @@ Expired sessions are cleaned up by a scheduled cron job (hourly).
 
 ## T7. AWS KMS Configuration
 
+### Asymmetric Key (Escrow — RSA_4096)
+
+| Setting | Value |
+|---|---|
+| **Key type** | Asymmetric RSA_4096, key usage ENCRYPT_DECRYPT |
+| **Algorithm** | RSAES_OAEP_SHA_256 |
+| **Region** | Configurable via `AWS_KMS_REGION` (default: `us-east-1`) |
+| **Access control** | Dedicated IAM credentials scoped to the NestJS API only (`AWS_ACCESS_KEY_ID_KMS`, `AWS_SECRET_ACCESS_KEY_KMS`) |
+| **Audit logging** | All KMS operations logged to AWS CloudTrail |
+
+The public key is served to clients via `GET /encryption/escrow/public-key` (cached server-side for 24 hours). Clients encrypt DEKs locally with RSA-OAEP-SHA256. The private key never leaves KMS hardware — only used for recovery decryption.
+
+### Symmetric Key (Retained)
+
 | Setting | Value |
 |---|---|
 | **Key type** | Symmetric AES-256 CMK |
-| **Region** | Configurable via `AWS_KMS_REGION` (default: `us-east-1`) |
-| **Access control** | Dedicated IAM credentials scoped to the NestJS API only (`AWS_ACCESS_KEY_ID_KMS`, `AWS_SECRET_ACCESS_KEY_KMS`) |
-| **Key rotation** | Enable automatic annual rotation for symmetric keys |
-| **Audit logging** | All KMS operations logged to AWS CloudTrail |
+| **Key rotation** | Enable automatic annual rotation |
 
-Required IAM permissions:
+The symmetric key (`AWS_KMS_KEY_ARN`) is retained for potential future uses but is no longer used for escrow operations.
+
+### IAM Permissions
 
 ```json
 {
   "Effect": "Allow",
   "Action": [
-    "kms:Encrypt",
     "kms:Decrypt",
+    "kms:GetPublicKey",
     "kms:DescribeKey"
   ],
-  "Resource": "<AWS_KMS_KEY_ARN>"
+  "Resource": "<AWS_KMS_ASYMMETRIC_KEY_ARN>"
 }
 ```
 
-Required environment variables:
+### Required Environment Variables
 
 ```
 AWS_KMS_REGION=us-east-1
-AWS_KMS_KEY_ARN=arn:aws:kms:us-east-1:ACCOUNT_ID:key/KEY_ID
+AWS_KMS_KEY_ARN=arn:aws:kms:us-east-1:ACCOUNT_ID:key/SYMMETRIC_KEY_ID
+AWS_KMS_ASYMMETRIC_KEY_ARN=arn:aws:kms:us-east-1:ACCOUNT_ID:key/RSA_4096_KEY_ID
 AWS_ACCESS_KEY_ID_KMS=...
 AWS_SECRET_ACCESS_KEY_KMS=...
 ```
 
-The recovery key never exists in application code or the Neon database. All encrypt/decrypt operations are API calls to KMS — the key material stays in AWS hardware.
+The RSA private key never exists in application code or the Neon database. All decrypt operations are API calls to KMS — the key material stays in AWS hardware.
 
 ---
 
@@ -464,7 +476,8 @@ All endpoints are under the `/encryption` controller and require Clerk authentic
 
 | Method | Path | Body | Description |
 |---|---|---|---|
-| `POST` | `/encryption/escrow` | `{ planId, dekPlaintext }` | Enable KMS escrow for a plan. Server encrypts DEK via KMS. Rate-limited. |
+| `GET` | `/encryption/escrow/public-key` | | Get KMS RSA_4096 public key (base64 SPKI/DER). Client uses this to encrypt the DEK locally. Rate-limited. |
+| `POST` | `/encryption/escrow` | `{ planId, encryptedDek }` | Enable KMS escrow for a plan. Client sends RSA-OAEP ciphertext; server stores directly. Rate-limited. |
 | `DELETE` | `/encryption/escrow?planId=<uuid>` | | Revoke KMS escrow for a plan. Deletes escrow DEK copy. Logs event, sends email. Rate-limited. |
 | `POST` | `/encryption/recovery` | `{ planId, newPublicKey }` | Initiate recovery. Returns DEK plaintext. Logs event, sends email. Rate-limited. |
 | `GET` | `/encryption/recovery/events` | | Get recovery audit history. |
@@ -489,7 +502,8 @@ All endpoints are under the `/encryption` controller and require Clerk authentic
 | Endpoint Group | Short (per second) | Medium (per minute) |
 |---|---|---|
 | Setup, key registration | 3 / 1s | 10 / 60s |
-| Escrow, recovery | 1 / 10s | 3 / 60s |
+| Escrow public key | 3 / 1s | 10 / 60s |
+| Escrow enable/revoke, recovery | 1 / 10s | 3 / 60s |
 | Device link session | 3 / 1s | 10 / 60s |
 
 ---
@@ -536,12 +550,14 @@ src/encryption/
 
 ### JavaScript String Immutability
 
-During escrow and recovery operations, DEK plaintext is transiently present in server memory as JavaScript strings (from request/response bodies). While `Buffer` instances are explicitly zeroed after use (`buffer.fill(0)`), JavaScript strings are immutable and cannot be deterministically overwritten — they persist in memory until garbage collected.
+During recovery operations, DEK plaintext is transiently present in server memory as JavaScript strings (from the KMS decrypt response and the HTTP response body). While `Buffer` instances are explicitly zeroed after use (`buffer.fill(0)`), JavaScript strings are immutable and cannot be deterministically overwritten — they persist in memory until garbage collected.
+
+With the asymmetric escrow model, the server never sees plaintext during escrow enrollment (the client encrypts locally). Plaintext exposure is limited to recovery operations only.
 
 This is a fundamental runtime limitation, not a code defect. The risk is mitigated by:
 - TLS transport encryption for all request/response data
 - Short-lived request contexts (strings are scoped to handler functions)
-- Key material is only transiently present during escrow enable and recovery operations
+- Key material is only transiently present during recovery operations (not enrollment)
 - Node.js GC typically reclaims short-lived strings quickly
 
 ### Trusted Contact Re-Invitation

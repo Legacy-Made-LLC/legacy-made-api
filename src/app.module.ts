@@ -6,6 +6,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
 import { RequestContextInterceptor } from './lib/request-context.interceptor';
 import { AuthModule } from './auth/auth.module';
+import { CacheModule } from './cache/cache.module';
 import { configSchema } from './config';
 import { ApiConfigModule } from './config/api-config.module';
 import { DbModule } from './db/db.module';
@@ -25,6 +26,7 @@ import { SharedPlansModule } from './shared-plans/shared-plans.module';
 import { ActivityLogModule } from './activity-log/activity-log.module';
 import { MessagesModule } from './messages/messages.module';
 import { EncryptionModule } from './encryption/encryption.module';
+import { PushNotificationsModule } from './push-notifications/push-notifications.module';
 
 @Module({
   imports: [
@@ -47,6 +49,7 @@ import { EncryptionModule } from './encryption/encryption.module';
         limit: 20, // 20 requests per minute
       },
     ]),
+    CacheModule,
     ApiConfigModule,
     AuthModule, // Must come before DbModule for CLS to be available
     DbModule,
@@ -60,6 +63,7 @@ import { EncryptionModule } from './encryption/encryption.module';
     WishesModule,
     ProgressModule,
     EmailModule,
+    PushNotificationsModule,
     TrustedContactsModule,
     AccessInvitationsModule,
     SharedPlansModule,

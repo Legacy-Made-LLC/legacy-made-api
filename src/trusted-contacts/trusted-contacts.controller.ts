@@ -62,7 +62,16 @@ export class TrustedContactsController {
     @Param('planId', ParseUUIDPipe) planId: string,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.trustedContactsService.remove(id, planId);
+    return this.trustedContactsService.delete(id, planId);
+  }
+
+  @Post(':id/revoke')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  revoke(
+    @Param('planId', ParseUUIDPipe) planId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.trustedContactsService.revoke(id, planId);
   }
 
   @Post(':id/resend-invitation')

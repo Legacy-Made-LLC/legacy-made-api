@@ -265,7 +265,9 @@ export const entries = pgTable(
     metadataSchema: jsonb('metadata_schema'),
 
     // Audit trail - tracks who last modified this entry
-    modifiedBy: text('modified_by').references(() => users.id),
+    modifiedBy: text('modified_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
 
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -314,7 +316,9 @@ export const wishes = pgTable(
     metadataSchema: jsonb('metadata_schema'),
 
     // Audit trail - tracks who last modified this wish
-    modifiedBy: text('modified_by').references(() => users.id),
+    modifiedBy: text('modified_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
 
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -370,7 +374,9 @@ export const messages = pgTable(
     metadataSchema: jsonb('metadata_schema'),
 
     // Audit trail - tracks who last modified this message
-    modifiedBy: text('modified_by').references(() => users.id),
+    modifiedBy: text('modified_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
 
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -790,6 +796,8 @@ export const userKeys = pgTable(
     keyVersion: integer('key_version').notNull(), // Server-assigned, monotonically increasing per user
     keyType: text('key_type').notNull(), // 'device' | 'recovery'
     deviceLabel: text('device_label'), // e.g. "iPhone 15", nullable
+    isActive: boolean('is_active').notNull().default(true),
+    deactivatedAt: timestamp('deactivated_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -985,6 +993,42 @@ export const deviceLinkingSessions = pgTable(
 ).enableRLS();
 
 // =============================================================================
+// PUSH TOKENS
+// =============================================================================
+
+/**
+ * Push Tokens table - stores Expo push notification tokens
+ *
+ * Each user can have multiple push tokens (one per device).
+ * Uses isCurrentUserPolicy so users manage their own tokens,
+ * plus shouldBypassRlsPolicy so the system can look up tokens
+ * for other users when sending notifications.
+ */
+export const pushTokens = pgTable(
+  'push_tokens',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    token: text('token').notNull().unique(),
+    platform: text('platform'), // 'ios' | 'android'
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index('push_tokens_user_id_idx').on(table.userId),
+    shouldBypassRlsPolicy(),
+    isCurrentUserPolicy(table.userId),
+  ],
+).enableRLS();
+
+// =============================================================================
 // TYPE EXPORTS
 // =============================================================================
 
@@ -1029,3 +1073,6 @@ export type NewKeyRecoveryEvent = typeof keyRecoveryEvents.$inferInsert;
 
 export type DeviceLinkingSession = typeof deviceLinkingSessions.$inferSelect;
 export type NewDeviceLinkingSession = typeof deviceLinkingSessions.$inferInsert;
+
+export type PushToken = typeof pushTokens.$inferSelect;
+export type NewPushToken = typeof pushTokens.$inferInsert;

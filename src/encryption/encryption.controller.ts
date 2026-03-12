@@ -6,6 +6,7 @@ import {
   Param,
   ParseIntPipe,
   ParseUUIDPipe,
+  Patch,
   Post,
   Put,
   Query,
@@ -25,6 +26,9 @@ import {
   SetupEncryptionDto,
   DepositPayloadDto,
   ClaimSessionDto,
+  GetKeysByEmailQueryDto,
+  GetMyKeysQueryDto,
+  GetUserKeysQueryDto,
 } from './dto';
 
 @Controller('encryption')
@@ -63,14 +67,33 @@ export class EncryptionController {
     return this.encryptionService.deleteKey(keyVersion);
   }
 
+  @Patch('keys/:keyVersion/deactivate')
+  deactivateKey(@Param('keyVersion', ParseIntPipe) keyVersion: number) {
+    return this.encryptionService.deactivateKey(keyVersion);
+  }
+
   @Get('keys/me')
-  getMyKeys() {
-    return this.encryptionService.getMyKeys();
+  getMyKeys(@Query() query: GetMyKeysQueryDto) {
+    return this.encryptionService.getMyKeys(query);
+  }
+
+  // Note: this route must be declared before 'keys/:userId' to avoid being swallowed by the param route.
+  @Get('keys/by-email')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    short: { limit: 10, ttl: 1000 },
+    medium: { limit: 30, ttl: 60000 },
+  })
+  getUserKeysByEmail(@Query() query: GetKeysByEmailQueryDto) {
+    return this.encryptionService.getUserKeysByEmail(query.email);
   }
 
   @Get('keys/:userId')
-  getUserKeys(@Param('userId') userId: string) {
-    return this.encryptionService.getUserKeys(userId);
+  getUserKeys(
+    @Param('userId') userId: string,
+    @Query() query: GetUserKeysQueryDto,
+  ) {
+    return this.encryptionService.getUserKeys(userId, query);
   }
 
   // =========================================================================
@@ -127,6 +150,16 @@ export class EncryptionController {
   // =========================================================================
   // KMS Escrow & Recovery
   // =========================================================================
+
+  @Get('escrow/public-key')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    short: { limit: 3, ttl: 1000 },
+    medium: { limit: 10, ttl: 60000 },
+  })
+  getEscrowPublicKey() {
+    return this.encryptionService.getEscrowPublicKey();
+  }
 
   @Post('escrow')
   @UseGuards(ThrottlerGuard)

@@ -29,7 +29,7 @@ export const configSchema = z.object({
 
   // AWS KMS (E2EE key escrow)
   AWS_KMS_REGION: z.string().optional().default('us-east-1'),
-  AWS_KMS_KEY_ARN: z.string(),
+  AWS_KMS_ASYMMETRIC_KEY_ARN: z.string(),
   AWS_ACCESS_KEY_ID_KMS: z.string(),
   AWS_SECRET_ACCESS_KEY_KMS: z.string(),
 
@@ -60,6 +60,11 @@ export const configSchema = z.object({
 
   // SUPPORT
   SUPPORT_EMAIL: z.email().default('support@mylegacymade.com'),
+
+  // EXPO PUSH NOTIFICATIONS
+  // Optional: improves Expo rate limits and prevents token impersonation.
+  // Push notifications work without it, but production deployments should set it.
+  EXPO_ACCESS_TOKEN: z.string().optional(),
 
   // FEATURE FLAGS
   GRANT_LIFETIME_TO_NEW_USERS: z

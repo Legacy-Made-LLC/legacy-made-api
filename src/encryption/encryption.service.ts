@@ -1,13 +1,15 @@
 import {
   Injectable,
   Logger,
+  BadRequestException,
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
-import { eq, and, sql } from 'drizzle-orm';
-import { DbService } from '../db/db.service';
+import { eq, and, sql, desc } from 'drizzle-orm';
+import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import { EmailService } from '../email/email.service';
+import { PushNotificationsService } from '../push-notifications/push-notifications.service';
 import { KmsService } from './kms.service';
 import {
   userKeys,
@@ -35,6 +37,7 @@ export class EncryptionService {
     private readonly cls: ApiClsService,
     private readonly kms: KmsService,
     private readonly email: EmailService,
+    private readonly pushNotifications: PushNotificationsService,
   ) {}
 
   // =========================================================================
@@ -176,25 +179,86 @@ export class EncryptionService {
   }
 
   /**
-   * Get all public keys for the current user, ordered by keyVersion.
+   * Deactivate a device key by version for the current user.
+   * Only device keys can be deactivated. Also deletes associated DEK copies.
    */
-  async getMyKeys() {
+  async deactivateKey(keyVersion: number) {
     const userId = this.cls.requireUserId();
 
     return this.db.rls(async (tx) => {
+      const [key] = await tx
+        .select()
+        .from(userKeys)
+        .where(
+          and(eq(userKeys.userId, userId), eq(userKeys.keyVersion, keyVersion)),
+        );
+
+      if (!key) {
+        throw new NotFoundException('Key not found');
+      }
+
+      if (key.keyType !== 'device') {
+        throw new BadRequestException('Only device keys can be deactivated');
+      }
+
+      if (!key.isActive) {
+        throw new ConflictException('Key is already deactivated');
+      }
+
+      const [updated] = await tx
+        .update(userKeys)
+        .set({ isActive: false, deactivatedAt: new Date() })
+        .where(
+          and(eq(userKeys.userId, userId), eq(userKeys.keyVersion, keyVersion)),
+        )
+        .returning();
+
+      await tx
+        .delete(encryptedDeks)
+        .where(
+          and(
+            eq(encryptedDeks.recipientId, userId),
+            eq(encryptedDeks.keyVersion, keyVersion),
+          ),
+        );
+
+      return updated;
+    });
+  }
+
+  /**
+   * Get all public keys for the current user, ordered by keyVersion.
+   */
+  async getMyKeys(query?: { active?: boolean }) {
+    const userId = this.cls.requireUserId();
+
+    return this.db.rls(async (tx) => {
+      const conditions = [eq(userKeys.userId, userId)];
+
+      if (query?.active !== undefined) {
+        conditions.push(eq(userKeys.isActive, query.active));
+      }
+
       return tx
         .select()
         .from(userKeys)
-        .where(eq(userKeys.userId, userId))
+        .where(and(...conditions))
         .orderBy(userKeys.keyVersion);
     });
   }
 
   /**
    * Get another user's public keys (for key exchange).
+   * Default: only active keys. Pass includeInactive=true to return all.
    */
-  async getUserKeys(userId: string) {
+  async getUserKeys(userId: string, query?: { includeInactive?: boolean }) {
     return this.db.rls(async (tx) => {
+      const conditions = [eq(userKeys.userId, userId)];
+
+      if (!query?.includeInactive) {
+        conditions.push(eq(userKeys.isActive, true));
+      }
+
       return tx
         .select({
           userId: userKeys.userId,
@@ -202,10 +266,49 @@ export class EncryptionService {
           keyVersion: userKeys.keyVersion,
           keyType: userKeys.keyType,
           deviceLabel: userKeys.deviceLabel,
+          isActive: userKeys.isActive,
+          deactivatedAt: userKeys.deactivatedAt,
         })
         .from(userKeys)
-        .where(eq(userKeys.userId, userId))
+        .where(and(...conditions))
         .orderBy(userKeys.keyVersion);
+    });
+  }
+
+  /**
+   * Look up a user's active public keys by email.
+   * Used by clients to determine if an invited contact already has an account
+   * and to encrypt DEKs for all their active device keys.
+   */
+  async getUserKeysByEmail(email: string) {
+    return this.db.bypassRls(async (tx) => {
+      const rows = await tx
+        .select({
+          publicKey: userKeys.publicKey,
+          keyVersion: userKeys.keyVersion,
+          keyType: userKeys.keyType,
+          isActive: userKeys.isActive,
+          userId: users.id,
+        })
+        .from(userKeys)
+        .innerJoin(users, eq(userKeys.userId, users.id))
+        .where(and(eq(users.email, email), eq(userKeys.isActive, true)))
+        .orderBy(desc(userKeys.keyVersion));
+
+      if (rows.length === 0) {
+        return { found: false as const };
+      }
+
+      return {
+        found: true as const,
+        userId: rows[0].userId,
+        keys: rows.map((r) => ({
+          publicKey: r.publicKey,
+          keyVersion: r.keyVersion,
+          keyType: r.keyType,
+          isActive: r.isActive,
+        })),
+      };
     });
   }
 
@@ -219,8 +322,8 @@ export class EncryptionService {
   async storeEncryptedDek(dto: StoreEncryptedDekDto) {
     const ownerId = this.cls.requireUserId();
 
-    return this.db.rls(async (tx) => {
-      const [dek] = await tx
+    const dek = await this.db.rls(async (tx) => {
+      const [result] = await tx
         .insert(encryptedDeks)
         .values({
           planId: dto.planId,
@@ -244,8 +347,21 @@ export class EncryptionService {
         })
         .returning();
 
-      return dek;
+      return result;
     });
+
+    // Notify trusted contact when a contact DEK is shared
+    if (dto.dekType === 'contact' && dto.recipientId !== ownerId) {
+      this.sendDekSharedNotification(
+        ownerId,
+        dto.recipientId,
+        dto.planId,
+      ).catch((error) => {
+        this.logger.error('Failed to send DEK shared push notification', error);
+      });
+    }
+
+    return dek;
   }
 
   /**
@@ -433,18 +549,20 @@ export class EncryptionService {
   // =========================================================================
 
   /**
-   * Enable KMS escrow by encrypting the DEK with KMS and storing it.
-   * Client sends the base64-encoded DEK plaintext.
+   * Get the KMS RSA public key for client-side escrow encryption.
+   */
+  async getEscrowPublicKey() {
+    const publicKey = await this.kms.getPublicKey();
+    return { publicKey };
+  }
+
+  /**
+   * Enable KMS escrow by storing the client-encrypted DEK ciphertext.
+   * Client encrypts the DEK locally with the KMS RSA public key (RSA-OAEP-SHA256)
+   * and sends the ciphertext — the server never sees the plaintext DEK.
    */
   async enableEscrow(dto: EnableEscrowDto) {
     const userId = this.cls.requireUserId();
-
-    const dekBuffer = Buffer.from(dto.dekPlaintext, 'base64');
-    const encryptedBuffer = await this.kms.encryptDek(dekBuffer);
-    const encryptedDekBase64 = encryptedBuffer.toString('base64');
-
-    // Zero out the plaintext buffer
-    dekBuffer.fill(0);
 
     const result = await this.db.rls(async (tx) => {
       const [dek] = await tx
@@ -454,7 +572,7 @@ export class EncryptionService {
           ownerId: userId,
           recipientId: userId,
           dekType: 'escrow',
-          encryptedDek: encryptedDekBase64,
+          encryptedDek: dto.encryptedDek,
           keyVersion: 0, // KMS-encrypted, not tied to user key version
         })
         .onConflictDoUpdate({
@@ -466,7 +584,7 @@ export class EncryptionService {
             encryptedDeks.dekType,
           ],
           set: {
-            encryptedDek: encryptedDekBase64,
+            encryptedDek: dto.encryptedDek,
           },
         })
         .returning();
@@ -670,8 +788,94 @@ export class EncryptionService {
   }
 
   // =========================================================================
+  // Shared helpers (used by TrustedContactsService, InvitationActionsService)
+  // =========================================================================
+
+  /**
+   * Delete contact DEK copies for a given recipient on a plan.
+   * Returns true if any rows were deleted.
+   *
+   * When called with a transaction (e.g. from revoke/delete), the DEK deletion
+   * is atomic with the caller's operation. When called without a transaction
+   * (e.g. from performDecline where the declining user doesn't own the plan),
+   * uses bypassRls for its own connection.
+   */
+  async deleteContactDekCopy(
+    planId: string,
+    recipientId: string,
+    existingTx?: DrizzleTransaction,
+  ): Promise<boolean> {
+    const execute = async (tx: DrizzleTransaction) => {
+      const [planOwner] = await tx
+        .select({ userId: plans.userId })
+        .from(plans)
+        .where(eq(plans.id, planId));
+
+      if (!planOwner) return [];
+
+      return tx
+        .delete(encryptedDeks)
+        .where(
+          and(
+            eq(encryptedDeks.ownerId, planOwner.userId),
+            eq(encryptedDeks.recipientId, recipientId),
+            eq(encryptedDeks.dekType, 'contact'),
+            eq(encryptedDeks.planId, planId),
+          ),
+        )
+        .returning();
+    };
+
+    const deleted = existingTx
+      ? await execute(existingTx)
+      : await this.db.bypassRls(execute);
+
+    return deleted.length > 0;
+  }
+
+  /**
+   * Resolve a user's clerk ID from their email.
+   * Returns null if no user found.
+   */
+  async resolveUserIdByEmail(email: string): Promise<string | null> {
+    const [user] = await this.db.bypassRls(async (tx) => {
+      return tx
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.email, email));
+    });
+
+    return user?.id ?? null;
+  }
+
+  // =========================================================================
   // Private helpers
   // =========================================================================
+
+  private async sendDekSharedNotification(
+    ownerId: string,
+    recipientId: string,
+    planId: string,
+  ): Promise<void> {
+    const owner = await this.db.bypassRls(async (tx) => {
+      const [u] = await tx
+        .select({ firstName: users.firstName, lastName: users.lastName })
+        .from(users)
+        .where(eq(users.id, ownerId));
+      return u;
+    });
+
+    const ownerName = owner
+      ? `${owner.firstName ?? ''} ${owner.lastName ?? ''}`.trim() || 'Someone'
+      : 'Someone';
+
+    await this.pushNotifications.sendToUser(
+      recipientId,
+      'Plan Access Granted',
+      `You now have access to ${ownerName}'s plan.`,
+      { type: 'dek_shared', planId },
+    );
+  }
 
   private async sendRecoveryNotification(userId: string): Promise<void> {
     // Look up user email via bypassRls (we're in an async context)
