@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { MetadataSchema } from '../common/dto/metadata-schema';
 import { groupBy } from '../common/utils/array';
+import { mergeMetadata } from '../common/utils/helpers';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { EntitlementsService } from '../entitlements';
 import { FilesService } from '../files/files.service';
@@ -151,14 +152,10 @@ export class MessagesService {
     return this.db.rls(async (tx) => {
       const existing = await this.findOneInTx(tx, id);
 
-      // Merge metadata if provided (existing.metadata is always an object due to DB default)
-      const existingMetadata =
-        existing.metadata && typeof existing.metadata === 'object'
-          ? (existing.metadata as Record<string, unknown>)
-          : {};
-      const updatedMetadata = updateMessageDto.metadata
-        ? { ...existingMetadata, ...updateMessageDto.metadata }
-        : existing.metadata;
+      const updatedMetadata = mergeMetadata(
+        existing.metadata,
+        updateMessageDto.metadata,
+      );
 
       const [updated] = await tx
         .update(messages)
