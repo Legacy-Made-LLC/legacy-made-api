@@ -602,30 +602,6 @@ export class EncryptionService {
     });
   }
 
-  /**
-   * Check if DEK copies exist for a given owner/recipient/plan combination.
-   * Returns array of DEK entries for multi-key visibility.
-   */
-  async getDekStatus(ownerId: string, recipientId: string, planId: string) {
-    return this.db.rls(async (tx) => {
-      const deks = await tx
-        .select({
-          dekType: encryptedDeks.dekType,
-          keyVersion: encryptedDeks.keyVersion,
-        })
-        .from(encryptedDeks)
-        .where(
-          and(
-            eq(encryptedDeks.ownerId, ownerId),
-            eq(encryptedDeks.recipientId, recipientId),
-            eq(encryptedDeks.planId, planId),
-          ),
-        );
-
-      return { exists: deks.length > 0, deks };
-    });
-  }
-
   // =========================================================================
   // KMS Escrow
   // =========================================================================

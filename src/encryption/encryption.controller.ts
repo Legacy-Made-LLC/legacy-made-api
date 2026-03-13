@@ -138,15 +138,6 @@ export class EncryptionController {
     return this.encryptionService.getEncryptedDeksForOwner(query.planId);
   }
 
-  @Get('deks/status/:ownerId/:recipientId')
-  getDekStatus(
-    @Param('ownerId') ownerId: string,
-    @Param('recipientId') recipientId: string,
-    @Query('planId', ParseUUIDPipe) planId: string,
-  ) {
-    return this.encryptionService.getDekStatus(ownerId, recipientId, planId);
-  }
-
   // =========================================================================
   // KMS Escrow & Recovery
   // =========================================================================
