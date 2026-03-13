@@ -383,7 +383,7 @@ describe('EncryptionService', () => {
   // =========================================================================
 
   describe('enableEscrow', () => {
-    it('should store client-encrypted DEK directly without server-side encryption', async () => {
+    it('should verify ciphertext via KMS and store client-encrypted DEK', async () => {
       const mockDek = {
         id: 'dek-1',
         planId: 'plan-123',
@@ -393,6 +393,9 @@ describe('EncryptionService', () => {
         encryptedDek: 'client-rsa-oaep-ciphertext',
         keyVersion: 0,
       };
+
+      // Mock KMS trial decryption (verification step)
+      mockKmsService.decryptDek.mockResolvedValue(Buffer.from('plaintext-dek'));
 
       mockDbService.rls.mockImplementation(async (cb) => {
         const tx = {
@@ -429,8 +432,8 @@ describe('EncryptionService', () => {
       } as any);
 
       expect(result).toEqual({ id: 'dek-1', enabled: true });
-      // Server should NOT call KMS encrypt — client already encrypted
-      expect(mockKmsService.getPublicKey).not.toHaveBeenCalled();
+      // Server should call KMS decrypt to verify the ciphertext
+      expect(mockKmsService.decryptDek).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -452,6 +455,13 @@ describe('EncryptionService', () => {
 
       mockDbService.rls.mockImplementation(async (cb) => {
         const tx = {
+          select: jest.fn().mockReturnValue({
+            from: jest.fn().mockReturnValue({
+              where: jest.fn().mockReturnValue({
+                limit: jest.fn().mockResolvedValue([{ id: 'tc-1' }]),
+              }),
+            }),
+          }),
           insert: jest.fn().mockReturnValue({
             values: jest.fn().mockReturnValue({
               onConflictDoUpdate: jest.fn().mockReturnValue({

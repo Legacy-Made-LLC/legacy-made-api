@@ -38,7 +38,6 @@ export class PushNotificationsService {
         .onConflictDoUpdate({
           target: pushTokens.token,
           set: {
-            userId,
             platform: dto.platform,
           },
         })

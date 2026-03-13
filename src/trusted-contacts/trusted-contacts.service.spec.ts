@@ -26,6 +26,7 @@ describe('TrustedContactsService', () => {
 
   const mockEncryptionService = {
     deleteContactDekCopy: jest.fn(),
+    storeContactDekCopies: jest.fn(),
   };
 
   const mockActivityLogService = {

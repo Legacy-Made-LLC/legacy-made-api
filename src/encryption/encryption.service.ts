@@ -17,6 +17,7 @@ import {
   keyRecoveryEvents,
   plans,
   users,
+  trustedContacts,
   type KeyRecoveryEventType,
 } from '../schema';
 import {
@@ -279,6 +280,11 @@ export class EncryptionService {
    * Look up a user's active public keys by email.
    * Used by clients to determine if an invited contact already has an account
    * and to encrypt DEKs for all their active device keys.
+   *
+   * Mitigations against user enumeration:
+   * - Tight rate limits on the controller (5/s, 15/min)
+   * - Uniform `{ found: false }` response for both "no account" and "account but no keys"
+   * - Requires authentication (no anonymous access)
    */
   async getUserKeysByEmail(email: string) {
     return this.db.bypassRls(async (tx) => {
@@ -318,11 +324,32 @@ export class EncryptionService {
 
   /**
    * Store an encrypted DEK copy. The owner is the current user.
+   * For 'contact' type DEKs, validates that the recipient is a trusted contact on the plan.
    */
   async storeEncryptedDek(dto: StoreEncryptedDekDto) {
     const ownerId = this.cls.requireUserId();
 
     const dek = await this.db.rls(async (tx) => {
+      // For contact DEKs, verify the recipient is a trusted contact on this plan
+      if (dto.dekType === 'contact' && dto.recipientId !== ownerId) {
+        const [contact] = await tx
+          .select({ id: trustedContacts.id })
+          .from(trustedContacts)
+          .where(
+            and(
+              eq(trustedContacts.planId, dto.planId),
+              eq(trustedContacts.clerkUserId, dto.recipientId),
+            ),
+          )
+          .limit(1);
+
+        if (!contact) {
+          throw new BadRequestException(
+            'Recipient is not a trusted contact on this plan',
+          );
+        }
+      }
+
       const [result] = await tx
         .insert(encryptedDeks)
         .values({
@@ -415,6 +442,61 @@ export class EncryptionService {
     const ownerId = this.cls.requireUserId();
 
     return this.db.rls(async (tx) => {
+      // Validate that all (recipientId, keyVersion) pairs reference active user keys
+      const uniqueKeyPairs = [
+        ...new Map(
+          dto.newDeks.map((d) => [`${d.recipientId}:${d.keyVersion}`, d]),
+        ).values(),
+      ];
+
+      for (const dek of uniqueKeyPairs) {
+        const [key] = await tx
+          .select({ id: userKeys.id })
+          .from(userKeys)
+          .where(
+            and(
+              eq(userKeys.userId, dek.recipientId),
+              eq(userKeys.keyVersion, dek.keyVersion),
+              eq(userKeys.isActive, true),
+            ),
+          )
+          .limit(1);
+
+        if (!key) {
+          throw new BadRequestException(
+            `No active key found for recipient ${dek.recipientId} at version ${dek.keyVersion}`,
+          );
+        }
+      }
+
+      // Validate contact DEK recipients are trusted contacts on this plan
+      const contactRecipientIds = [
+        ...new Set(
+          dto.newDeks
+            .filter((d) => d.dekType === 'contact' && d.recipientId !== ownerId)
+            .map((d) => d.recipientId),
+        ),
+      ];
+
+      for (const recipientId of contactRecipientIds) {
+        const [contact] = await tx
+          .select({ id: trustedContacts.id })
+          .from(trustedContacts)
+          .where(
+            and(
+              eq(trustedContacts.planId, dto.planId),
+              eq(trustedContacts.clerkUserId, recipientId),
+            ),
+          )
+          .limit(1);
+
+        if (!contact) {
+          throw new BadRequestException(
+            `Recipient ${recipientId} is not a trusted contact on this plan`,
+          );
+        }
+      }
+
       // Delete all existing non-escrow DEK copies for this plan
       await tx
         .delete(encryptedDeks)
@@ -560,9 +642,24 @@ export class EncryptionService {
    * Enable KMS escrow by storing the client-encrypted DEK ciphertext.
    * Client encrypts the DEK locally with the KMS RSA public key (RSA-OAEP-SHA256)
    * and sends the ciphertext — the server never sees the plaintext DEK.
+   *
+   * Verifies the ciphertext is valid by performing a trial KMS decryption before
+   * storing. This guarantees the escrow DEK is recoverable, preventing a scenario
+   * where the user discovers corrupted escrow data months/years later.
    */
   async enableEscrow(dto: EnableEscrowDto) {
     const userId = this.cls.requireUserId();
+
+    // Verify the ciphertext is valid RSA-OAEP by trial-decrypting, then discard
+    const encryptedBuffer = Buffer.from(dto.encryptedDek, 'base64');
+    const dekPlaintext = await this.kms
+      .decryptDek(encryptedBuffer)
+      .catch(() => {
+        throw new BadRequestException(
+          'Invalid escrow ciphertext. Ensure the DEK was encrypted with the KMS public key using RSA-OAEP-SHA256.',
+        );
+      });
+    dekPlaintext.fill(0);
 
     const result = await this.db.rls(async (tx) => {
       const [dek] = await tx
@@ -653,20 +750,17 @@ export class EncryptionService {
   async initiateRecovery(dto: InitiateRecoveryDto) {
     const userId = this.cls.requireUserId();
 
-    // Log recovery initiation
-    await this.db.rls(async (tx) => {
-      await tx.insert(keyRecoveryEvents).values({
-        userId,
-        eventType: 'escrow_recovery_initiated' satisfies KeyRecoveryEventType,
-        ipAddress: this.cls.getIpAddress(),
-        userAgent: this.cls.getUserAgent(),
-        details: { newPublicKey: dto.newPublicKey },
-      });
-    });
-
     try {
-      // Find escrow DEK for the specified plan
+      // Single RLS transaction: log initiation, fetch escrow DEK, log completion
       const escrowDek = await this.db.rls(async (tx) => {
+        await tx.insert(keyRecoveryEvents).values({
+          userId,
+          eventType: 'escrow_recovery_initiated' satisfies KeyRecoveryEventType,
+          ipAddress: this.cls.getIpAddress(),
+          userAgent: this.cls.getUserAgent(),
+          details: { newPublicKey: dto.newPublicKey },
+        });
+
         const [dek] = await tx
           .select()
           .from(encryptedDeks)
@@ -688,7 +782,7 @@ export class EncryptionService {
         return dek;
       });
 
-      // Decrypt via KMS
+      // Decrypt via KMS (outside transaction — no DB needed)
       const encryptedBuffer = Buffer.from(escrowDek.encryptedDek, 'base64');
       const dekPlaintext = await this.kms.decryptDek(encryptedBuffer);
       const dekPlaintextBase64 = dekPlaintext.toString('base64');
@@ -848,26 +942,74 @@ export class EncryptionService {
     return user?.id ?? null;
   }
 
+  /**
+   * Store contact DEK copies for a trusted contact within an existing transaction.
+   * Used by TrustedContactsService.create() for atomic DEK + contact creation.
+   */
+  async storeContactDekCopies(
+    tx: DrizzleTransaction,
+    planId: string,
+    ownerId: string,
+    deks: { recipientId: string; encryptedDek: string; keyVersion: number }[],
+  ): Promise<void> {
+    for (const dekEntry of deks) {
+      await tx
+        .insert(encryptedDeks)
+        .values({
+          planId,
+          ownerId,
+          recipientId: dekEntry.recipientId,
+          dekType: 'contact',
+          encryptedDek: dekEntry.encryptedDek,
+          keyVersion: dekEntry.keyVersion,
+        })
+        .onConflictDoUpdate({
+          target: [
+            encryptedDeks.planId,
+            encryptedDeks.ownerId,
+            encryptedDeks.recipientId,
+            encryptedDeks.keyVersion,
+            encryptedDeks.dekType,
+          ],
+          set: { encryptedDek: dekEntry.encryptedDek },
+        });
+    }
+  }
+
   // =========================================================================
   // Private helpers
   // =========================================================================
+
+  private async getUserForNotification(
+    userId: string,
+  ): Promise<{ email: string; firstName: string } | null> {
+    const user = await this.db.bypassRls(async (tx) => {
+      const [u] = await tx
+        .select({
+          email: users.email,
+          firstName: users.firstName,
+          lastName: users.lastName,
+        })
+        .from(users)
+        .where(eq(users.id, userId));
+      return u;
+    });
+
+    if (!user?.email) {
+      this.logger.warn(`Cannot send notification: no email for user ${userId}`);
+      return null;
+    }
+
+    return { email: user.email, firstName: user.firstName ?? 'there' };
+  }
 
   private async sendDekSharedNotification(
     ownerId: string,
     recipientId: string,
     planId: string,
   ): Promise<void> {
-    const owner = await this.db.bypassRls(async (tx) => {
-      const [u] = await tx
-        .select({ firstName: users.firstName, lastName: users.lastName })
-        .from(users)
-        .where(eq(users.id, ownerId));
-      return u;
-    });
-
-    const ownerName = owner
-      ? `${owner.firstName ?? ''} ${owner.lastName ?? ''}`.trim() || 'Someone'
-      : 'Someone';
+    const owner = await this.getUserForNotification(ownerId);
+    const ownerName = owner?.firstName ?? 'Someone';
 
     await this.pushNotifications.sendToUser(
       recipientId,
@@ -878,25 +1020,12 @@ export class EncryptionService {
   }
 
   private async sendRecoveryNotification(userId: string): Promise<void> {
-    // Look up user email via bypassRls (we're in an async context)
-    const user = await this.db.bypassRls(async (tx) => {
-      const [u] = await tx
-        .select({ email: users.email, firstName: users.firstName })
-        .from(users)
-        .where(eq(users.id, userId));
-      return u;
-    });
-
-    if (!user?.email) {
-      this.logger.warn(
-        `Cannot send recovery notification: no email for user ${userId}`,
-      );
-      return;
-    }
+    const user = await this.getUserForNotification(userId);
+    if (!user) return;
 
     await this.email.sendRecoveryNotification({
       to: user.email,
-      firstName: user.firstName ?? 'there',
+      firstName: user.firstName,
       ipAddress: this.cls.getIpAddress(),
       userAgent: this.cls.getUserAgent(),
       recoveredAt: new Date(),
@@ -904,47 +1033,23 @@ export class EncryptionService {
   }
 
   private async sendEscrowEnabledNotification(userId: string): Promise<void> {
-    const user = await this.db.bypassRls(async (tx) => {
-      const [u] = await tx
-        .select({ email: users.email, firstName: users.firstName })
-        .from(users)
-        .where(eq(users.id, userId));
-      return u;
-    });
-
-    if (!user?.email) {
-      this.logger.warn(
-        `Cannot send escrow enabled notification: no email for user ${userId}`,
-      );
-      return;
-    }
+    const user = await this.getUserForNotification(userId);
+    if (!user) return;
 
     await this.email.sendEscrowEnabledNotification({
       to: user.email,
-      firstName: user.firstName ?? 'there',
+      firstName: user.firstName,
       enabledAt: new Date(),
     });
   }
 
   private async sendEscrowRevokedNotification(userId: string): Promise<void> {
-    const user = await this.db.bypassRls(async (tx) => {
-      const [u] = await tx
-        .select({ email: users.email, firstName: users.firstName })
-        .from(users)
-        .where(eq(users.id, userId));
-      return u;
-    });
-
-    if (!user?.email) {
-      this.logger.warn(
-        `Cannot send escrow revoked notification: no email for user ${userId}`,
-      );
-      return;
-    }
+    const user = await this.getUserForNotification(userId);
+    if (!user) return;
 
     await this.email.sendEscrowRevokedNotification({
       to: user.email,
-      firstName: user.firstName ?? 'there',
+      firstName: user.firstName,
       revokedAt: new Date(),
     });
   }

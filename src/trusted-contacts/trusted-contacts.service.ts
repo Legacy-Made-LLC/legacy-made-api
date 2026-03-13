@@ -120,28 +120,12 @@ export class TrustedContactsService {
 
       // Atomically insert DEK copies if provided
       if (deksData?.length) {
-        for (const dekEntry of deksData) {
-          await tx
-            .insert(encryptedDeks)
-            .values({
-              planId,
-              ownerId: plan.ownerId,
-              recipientId: dekEntry.recipientId,
-              dekType: 'contact',
-              encryptedDek: dekEntry.encryptedDek,
-              keyVersion: dekEntry.keyVersion,
-            })
-            .onConflictDoUpdate({
-              target: [
-                encryptedDeks.planId,
-                encryptedDeks.ownerId,
-                encryptedDeks.recipientId,
-                encryptedDeks.keyVersion,
-                encryptedDeks.dekType,
-              ],
-              set: { encryptedDek: dekEntry.encryptedDek },
-            });
-        }
+        await this.encryptionService.storeContactDekCopies(
+          tx,
+          planId,
+          plan.ownerId,
+          deksData,
+        );
       }
 
       const ownerName = `${plan.ownerFirstName} ${plan.ownerLastName}`.trim();

@@ -81,8 +81,8 @@ export class EncryptionController {
   @Get('keys/by-email')
   @UseGuards(ThrottlerGuard)
   @Throttle({
-    short: { limit: 10, ttl: 1000 },
-    medium: { limit: 30, ttl: 60000 },
+    short: { limit: 5, ttl: 1000 },
+    medium: { limit: 15, ttl: 60000 },
   })
   getUserKeysByEmail(@Query() query: GetKeysByEmailQueryDto) {
     return this.encryptionService.getUserKeysByEmail(query.email);

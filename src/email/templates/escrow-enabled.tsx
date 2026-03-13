@@ -30,8 +30,18 @@ export const EscrowEnabledEmail = ({
         security settings.
       </Text>
       <Text style={secondaryText}>
-        Changed on {enabledAt.toLocaleDateString()} at{' '}
-        {enabledAt.toLocaleTimeString()}
+        Changed on{' '}
+        {enabledAt.toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        })}{' '}
+        at{' '}
+        {enabledAt.toLocaleTimeString('en-US', {
+          hour: 'numeric',
+          minute: '2-digit',
+          timeZoneName: 'short',
+        })}
       </Text>
       <Text style={paragraph}>
         If you didn't make this change, please contact support immediately at{' '}

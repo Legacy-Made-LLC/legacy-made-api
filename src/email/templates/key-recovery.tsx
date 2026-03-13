@@ -34,8 +34,18 @@ export const KeyRecoveryEmail = ({
         <strong style={{ color: '#1A1A1A' }}>Device:</strong> {userAgent}
       </Text>
       <Text style={secondaryText}>
-        Recovered on {recoveredAt.toLocaleDateString()} at{' '}
-        {recoveredAt.toLocaleTimeString()}
+        Recovered on{' '}
+        {recoveredAt.toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        })}{' '}
+        at{' '}
+        {recoveredAt.toLocaleTimeString('en-US', {
+          hour: 'numeric',
+          minute: '2-digit',
+          timeZoneName: 'short',
+        })}
       </Text>
       <Text style={paragraph}>
         If you did not initiate this recovery, please contact support
