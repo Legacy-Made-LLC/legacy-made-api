@@ -71,6 +71,48 @@
       "when": 1772668428641,
       "tag": "0009_flaky_valeria_richards",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1772908810584,
+      "tag": "0010_brown_crusher_hogan",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1773274831530,
+      "tag": "0011_hard_omega_flight",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1773329998191,
+      "tag": "0012_aromatic_secret_warriors",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1773340956124,
+      "tag": "0013_mute_black_tom",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1773344511835,
+      "tag": "0014_narrow_psynapse",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1773460343057,
+      "tag": "0015_young_marrow",
+      "breakpoints": true
     }
   ]
 }

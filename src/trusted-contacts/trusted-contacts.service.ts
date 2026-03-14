@@ -9,8 +9,16 @@ import { ActivityLogService } from '../activity-log/activity-log.service';
 import { ApiConfigService } from '../config/api-config.service';
 import { DbService } from '../db/db.service';
 import { EmailService } from '../email/email.service';
+import { EncryptionService } from '../encryption/encryption.service';
 import { AccessLevel } from '../lib/types/cls';
-import { trustedContacts, users, plans, type TrustedContact } from '../schema';
+import { PushNotificationsService } from '../push-notifications/push-notifications.service';
+import {
+  trustedContacts,
+  users,
+  plans,
+  encryptedDeks,
+  type TrustedContact,
+} from '../schema';
 import { CreateTrustedContactDto } from './dto/create-trusted-contact.dto';
 import { UpdateTrustedContactDto } from './dto/update-trusted-contact.dto';
 import { InvitationTokenService } from './invitation-token.service';
@@ -24,9 +32,11 @@ export class TrustedContactsService {
   constructor(
     private readonly db: DbService,
     private readonly emailService: EmailService,
+    private readonly encryptionService: EncryptionService,
     private readonly invitationTokenService: InvitationTokenService,
     private readonly activityLog: ActivityLogService,
     private readonly config: ApiConfigService,
+    private readonly pushNotifications: PushNotificationsService,
   ) {
     this.invitationBaseUrl = this.config.get('INVITATION_BASE_URL');
   }
@@ -39,6 +49,8 @@ export class TrustedContactsService {
     dto: CreateTrustedContactDto,
   ): Promise<TrustedContact> {
     return this.db.rls(async (tx) => {
+      const { deks: deksData, ...contactFields } = dto;
+
       // Check if a trusted contact with this email already exists for this plan
       const [existing] = await tx
         .select()
@@ -46,7 +58,7 @@ export class TrustedContactsService {
         .where(
           and(
             eq(trustedContacts.planId, planId),
-            eq(trustedContacts.email, dto.email),
+            eq(trustedContacts.email, contactFields.email),
           ),
         );
 
@@ -67,9 +79,8 @@ export class TrustedContactsService {
         const [updated] = await tx
           .update(trustedContacts)
           .set({
-            ...dto,
+            ...contactFields,
             accessStatus: 'pending',
-            clerkUserId: null,
             acceptedAt: null,
             declinedAt: null,
             revokedAt: null,
@@ -84,7 +95,7 @@ export class TrustedContactsService {
           .insert(trustedContacts)
           .values({
             planId,
-            ...dto,
+            ...contactFields,
             accessStatus: 'pending',
           })
           .returning();
@@ -95,6 +106,7 @@ export class TrustedContactsService {
       // Get plan owner information for the email
       const [plan] = await tx
         .select({
+          ownerId: plans.userId,
           ownerFirstName: users.firstName,
           ownerLastName: users.lastName,
         })
@@ -104,6 +116,16 @@ export class TrustedContactsService {
 
       if (!plan) {
         throw new NotFoundException('Plan not found');
+      }
+
+      // Atomically insert DEK copies if provided
+      if (deksData?.length) {
+        await this.encryptionService.storeContactDekCopies(
+          tx,
+          planId,
+          plan.ownerId,
+          deksData,
+        );
       }
 
       const ownerName = `${plan.ownerFirstName} ${plan.ownerLastName}`.trim();
@@ -141,6 +163,13 @@ export class TrustedContactsService {
         // We don't throw here - the contact was created, email can be resent
       }
 
+      // Send push notification if the invitee is already a user
+      await this.sendInvitationPushNotification(
+        trustedContact.email,
+        ownerName,
+        planId,
+      );
+
       await this.activityLog.log(tx, {
         planId,
         action: existing ? 'updated' : 'created',
@@ -156,22 +185,42 @@ export class TrustedContactsService {
   }
 
   /**
-   * Get all trusted contacts for a plan
+   * Get all trusted contacts for a plan, with dekShared status.
    */
-  async findAll(planId: string): Promise<TrustedContact[]> {
+  async findAll(planId: string) {
     return this.db.rls(async (tx) => {
-      return tx
+      const contacts = await tx
         .select()
         .from(trustedContacts)
         .where(eq(trustedContacts.planId, planId))
         .orderBy(trustedContacts.createdAt);
+
+      // Batch-check which contacts have a DEK copy shared with them
+      const dekCopies = await tx
+        .select({ recipientId: encryptedDeks.recipientId })
+        .from(encryptedDeks)
+        .where(
+          and(
+            eq(encryptedDeks.planId, planId),
+            eq(encryptedDeks.dekType, 'contact'),
+          ),
+        );
+
+      const recipientsWithDek = new Set(dekCopies.map((d) => d.recipientId));
+
+      return contacts.map((contact) => ({
+        ...contact,
+        dekShared: contact.clerkUserId
+          ? recipientsWithDek.has(contact.clerkUserId)
+          : false,
+      }));
     });
   }
 
   /**
-   * Get a specific trusted contact
+   * Get a specific trusted contact, with dekShared status.
    */
-  async findOne(id: string, planId: string): Promise<TrustedContact> {
+  async findOne(id: string, planId: string) {
     return this.db.rls(async (tx) => {
       const [trustedContact] = await tx
         .select()
@@ -184,7 +233,23 @@ export class TrustedContactsService {
         throw new NotFoundException('Trusted contact not found');
       }
 
-      return trustedContact;
+      let dekShared = false;
+      if (trustedContact.clerkUserId) {
+        const [dekCopy] = await tx
+          .select({ id: encryptedDeks.id })
+          .from(encryptedDeks)
+          .where(
+            and(
+              eq(encryptedDeks.planId, planId),
+              eq(encryptedDeks.recipientId, trustedContact.clerkUserId),
+              eq(encryptedDeks.dekType, 'contact'),
+            ),
+          )
+          .limit(1);
+        dekShared = !!dekCopy;
+      }
+
+      return { ...trustedContact, dekShared };
     });
   }
 
@@ -225,7 +290,7 @@ export class TrustedContactsService {
   /**
    * Revoke access (soft delete - sets status to revoked_by_owner)
    */
-  async remove(id: string, planId: string): Promise<void> {
+  async revoke(id: string, planId: string): Promise<void> {
     return this.db.rls(async (tx) => {
       const [trustedContact] = await tx
         .select()
@@ -246,15 +311,68 @@ export class TrustedContactsService {
         })
         .where(eq(trustedContacts.id, id));
 
+      // Delete the contact's encrypted DEK copy if they had one (atomic with revoke)
+      const dekCopyDeleted = trustedContact.clerkUserId
+        ? await this.encryptionService.deleteContactDekCopy(
+            planId,
+            trustedContact.clerkUserId,
+            tx,
+          )
+        : false;
+
       await this.activityLog.log(tx, {
         planId,
         action: 'updated',
         resourceType: 'trusted_contact',
         resourceId: id,
-        details: { statusChange: 'revoked_by_owner' },
+        details: { statusChange: 'revoked_by_owner', dekCopyDeleted },
       });
 
       this.logger.log(`Revoked trusted contact ${id} from plan ${planId}`);
+    });
+  }
+
+  /**
+   * Permanently delete a trusted contact and its associated DEK copies
+   */
+  async delete(id: string, planId: string): Promise<void> {
+    return this.db.rls(async (tx) => {
+      const [trustedContact] = await tx
+        .select()
+        .from(trustedContacts)
+        .where(
+          and(eq(trustedContacts.id, id), eq(trustedContacts.planId, planId)),
+        );
+
+      if (!trustedContact) {
+        throw new NotFoundException('Trusted contact not found');
+      }
+
+      // Delete the contact's encrypted DEK copy if they had one (atomic with delete)
+      const dekCopyDeleted = trustedContact.clerkUserId
+        ? await this.encryptionService.deleteContactDekCopy(
+            planId,
+            trustedContact.clerkUserId,
+            tx,
+          )
+        : false;
+
+      // Hard delete the trusted contact record
+      await tx.delete(trustedContacts).where(eq(trustedContacts.id, id));
+
+      await this.activityLog.log(tx, {
+        planId,
+        action: 'deleted',
+        resourceType: 'trusted_contact',
+        resourceId: id,
+        details: {
+          email: trustedContact.email,
+          previousStatus: trustedContact.accessStatus,
+          dekCopyDeleted,
+        },
+      });
+
+      this.logger.log(`Deleted trusted contact ${id} from plan ${planId}`);
     });
   }
 
@@ -318,7 +436,48 @@ export class TrustedContactsService {
         invitationUrl,
       });
 
+      // Send push notification if the invitee is already a user
+      await this.sendInvitationPushNotification(
+        trustedContact.email,
+        ownerName,
+        planId,
+      );
+
       this.logger.log(`Resent invitation to ${trustedContact.email}`);
     });
+  }
+
+  /**
+   * Send a push notification to an invitee if they already have an account.
+   * Errors are logged, not thrown (fire-and-forget).
+   */
+  private async sendInvitationPushNotification(
+    inviteeEmail: string,
+    ownerName: string,
+    planId: string,
+  ): Promise<void> {
+    try {
+      const [existingUser] = await this.db.bypassRls(async (tx) => {
+        return tx
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.email, inviteeEmail))
+          .limit(1);
+      });
+
+      if (existingUser) {
+        await this.pushNotifications.sendToUser(
+          existingUser.id,
+          "You've Been Invited",
+          `${ownerName} invited you as a trusted contact.`,
+          { type: 'invitation_received', planId },
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to send invitation push notification to ${inviteeEmail}`,
+        error,
+      );
+    }
   }
 }

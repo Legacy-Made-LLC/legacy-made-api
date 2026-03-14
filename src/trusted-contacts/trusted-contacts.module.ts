@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
+import { EncryptionModule } from '../encryption/encryption.module';
 import { InvitationTokenService } from './invitation-token.service';
 import { TrustedContactsController } from './trusted-contacts.controller';
 import { TrustedContactsService } from './trusted-contacts.service';
 
 @Module({
+  imports: [EncryptionModule],
   providers: [TrustedContactsService, InvitationTokenService],
   controllers: [TrustedContactsController],
   exports: [InvitationTokenService],

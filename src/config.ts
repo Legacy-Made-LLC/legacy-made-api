@@ -27,12 +27,11 @@ export const configSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string(),
   R2_BUCKET_NAME: z.string(),
 
-  // MUX
-  MUX_TOKEN_ID: z.string(),
-  MUX_TOKEN_SECRET: z.string(),
-  MUX_SIGNING_KEY_ID: z.string(),
-  MUX_SIGNING_KEY_SECRET: z.string(),
-  MUX_WEBHOOK_SECRET: z.string(),
+  // AWS KMS (E2EE key escrow)
+  AWS_KMS_REGION: z.string().optional().default('us-east-1'),
+  AWS_KMS_ASYMMETRIC_KEY_ARN: z.string(),
+  AWS_ACCESS_KEY_ID_KMS: z.string(),
+  AWS_SECRET_ACCESS_KEY_KMS: z.string(),
 
   // RESEND (Email Service)
   RESEND_API_KEY: z.string(),
@@ -58,6 +57,14 @@ export const configSchema = z.object({
     .number()
     .optional()
     .default(100 * 1024 * 1024), // 100MB
+
+  // SUPPORT
+  SUPPORT_EMAIL: z.email().default('support@mylegacymade.com'),
+
+  // EXPO PUSH NOTIFICATIONS
+  // Optional: improves Expo rate limits and prevents token impersonation.
+  // Push notifications work without it, but production deployments should set it.
+  EXPO_ACCESS_TOKEN: z.string().optional(),
 
   // FEATURE FLAGS
   GRANT_LIFETIME_TO_NEW_USERS: z

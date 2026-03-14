@@ -37,4 +37,12 @@ export class ApiClsService {
     }
     return level;
   }
+
+  getIpAddress(): string | undefined {
+    return this.cls.get('ipAddress');
+  }
+
+  getUserAgent(): string | undefined {
+    return this.cls.get('userAgent');
+  }
 }

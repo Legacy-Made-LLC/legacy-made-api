@@ -21,12 +21,13 @@
     "email:dev": "email dev --dir src/email/templates"
   },
   "dependencies": {
+    "@aws-sdk/client-kms": "^3.975.0",
     "@aws-sdk/client-s3": "^3.975.0",
     "@aws-sdk/s3-request-presigner": "^3.975.0",
     "@clerk/express": "^1.7.62",
-    "@mux/mux-node": "^12.8.1",
     "@n8n/p-retry": "^6.2.0-2",
     "@neondatabase/serverless": "^1.0.2",
+    "@nestjs/cache-manager": "^3.1.0",
     "@nestjs/common": "^11.1.12",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.1.12",
@@ -35,7 +36,9 @@
     "@nestjs/terminus": "^11.0.0",
     "@nestjs/throttler": "^6.5.0",
     "@react-email/components": "^1.0.7",
+    "cache-manager": "^7.2.8",
     "drizzle-orm": "^0.45.1",
+    "expo-server-sdk": "^6.1.0",
     "jsonwebtoken": "^9.0.3",
     "loops": "^6.2.1",
     "nestjs-cls": "^6.2.0",
@@ -95,6 +98,9 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "transformIgnorePatterns": [
+      "node_modules/(?!(expo-server-sdk)/)"
+    ]
   }
 }

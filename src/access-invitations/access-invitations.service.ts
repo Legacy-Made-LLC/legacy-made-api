@@ -10,7 +10,13 @@ import { ActivityLogService } from '../activity-log/activity-log.service';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { EmailService } from '../email/email.service';
 import { ApiClsService } from '../lib/api-cls.service';
-import { plans, trustedContacts, users, type TrustedContact } from '../schema';
+import {
+  plans,
+  trustedContacts,
+  users,
+  encryptedDeks,
+  type TrustedContact,
+} from '../schema';
 import {
   InvitationTokenPayload,
   InvitationTokenService,
@@ -173,12 +179,23 @@ export class AccessInvitationsService {
         })
         .where(eq(trustedContacts.id, trustedContact.id));
 
+      // Delete own DEK copies where I am the recipient for this plan
+      await tx
+        .delete(encryptedDeks)
+        .where(
+          and(
+            eq(encryptedDeks.recipientId, currentUserId),
+            eq(encryptedDeks.dekType, 'contact'),
+            eq(encryptedDeks.planId, planId),
+          ),
+        );
+
       await this.activityLog.log(tx, {
         planId,
         action: 'updated',
         resourceType: 'trusted_contact',
         resourceId: trustedContact.id,
-        details: { statusChange: 'revoked_by_contact' },
+        details: { statusChange: 'revoked_by_contact', dekCopyDeleted: true },
       });
 
       this.logger.log(

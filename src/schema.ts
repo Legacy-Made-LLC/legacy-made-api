@@ -17,6 +17,7 @@ import { sql } from 'drizzle-orm';
 import { crudPolicy } from 'drizzle-orm/neon';
 import {
   type AnyPgColumn,
+  boolean,
   index,
   integer,
   jsonb,
@@ -215,6 +216,7 @@ export const plans = pgTable(
     name: text('name').default('My Legacy Plan').notNull(),
     planType: text('plan_type').default('self').notNull(), // 'self' | 'dependent'
     forName: text('for_name'), // Name of person this plan is for (if dependent)
+    e2eeEnabled: boolean('e2ee_enabled').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -263,7 +265,9 @@ export const entries = pgTable(
     metadataSchema: jsonb('metadata_schema'),
 
     // Audit trail - tracks who last modified this entry
-    modifiedBy: text('modified_by').references(() => users.id),
+    modifiedBy: text('modified_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
 
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -312,7 +316,9 @@ export const wishes = pgTable(
     metadataSchema: jsonb('metadata_schema'),
 
     // Audit trail - tracks who last modified this wish
-    modifiedBy: text('modified_by').references(() => users.id),
+    modifiedBy: text('modified_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
 
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -368,7 +374,9 @@ export const messages = pgTable(
     metadataSchema: jsonb('metadata_schema'),
 
     // Audit trail - tracks who last modified this message
-    modifiedBy: text('modified_by').references(() => users.id),
+    modifiedBy: text('modified_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
 
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -579,7 +587,7 @@ export const planActivityLog = pgTable(
  *
  * Files can be attached to entries, wishes, or messages (polymorphic relationship).
  * Exactly one of entryId, wishId, or messageId must be set.
- * Actual file storage is in Cloudflare R2 (documents, images, audio) or Mux (video).
+ * Actual file storage is in Cloudflare R2.
  *
  * RLS policies ensure users can only access files belonging to their plans.
  */
@@ -610,15 +618,14 @@ export const files = pgTable(
     sizeBytes: integer('size_bytes').notNull(),
 
     // Storage location
-    storageType: text('storage_type').notNull(), // 'r2' | 'mux'
-    storageKey: text('storage_key').notNull(), // R2 object key or Mux upload ID
+    storageType: text('storage_type').notNull(), // 'r2'
+    storageKey: text('storage_key').notNull(), // R2 object key
 
     // Upload status (for multipart/async uploads)
     uploadStatus: text('upload_status').default('pending').notNull(), // 'pending' | 'uploading' | 'complete' | 'failed'
 
-    // Mux-specific fields (null for R2 files)
-    muxPlaybackId: text('mux_playback_id'),
-    muxAssetId: text('mux_asset_id'),
+    // E2EE
+    isEncrypted: boolean('is_encrypted').notNull().default(false),
 
     // Access control
     accessLevel: text('access_level').default('private').notNull(), // 'private' | 'shareable'
@@ -640,16 +647,23 @@ export const files = pgTable(
     index('files_parent_file_id_idx').on(table.parentFileId),
     index('files_share_token_idx').on(table.shareToken),
     shouldBypassRlsPolicy(),
+    // Files RLS: uses separate EXISTS subqueries (not JOIN) for the owner
+    // and trusted-contact checks. A JOIN to plans would fail for trusted
+    // contacts because plans' RLS is owner-only, filtering out the joined
+    // row before the OR clause can evaluate the trusted_contacts branch.
     crudPolicy({
       role: 'public',
       read: sql`
         (
           ${table.entryId} IS NOT NULL AND EXISTS (
             SELECT 1 FROM entries e
-            JOIN plans p ON p.id = e.plan_id
             WHERE e.id = ${table.entryId}
             AND (
-              p.user_id = current_setting('app.user_id', true)
+              EXISTS (
+                SELECT 1 FROM plans p
+                WHERE p.id = e.plan_id
+                AND p.user_id = current_setting('app.user_id', true)
+              )
               OR EXISTS (
                 SELECT 1 FROM trusted_contacts tc
                 WHERE tc.plan_id = e.plan_id
@@ -665,10 +679,13 @@ export const files = pgTable(
         (
           ${table.wishId} IS NOT NULL AND EXISTS (
             SELECT 1 FROM wishes w
-            JOIN plans p ON p.id = w.plan_id
             WHERE w.id = ${table.wishId}
             AND (
-              p.user_id = current_setting('app.user_id', true)
+              EXISTS (
+                SELECT 1 FROM plans p
+                WHERE p.id = w.plan_id
+                AND p.user_id = current_setting('app.user_id', true)
+              )
               OR EXISTS (
                 SELECT 1 FROM trusted_contacts tc
                 WHERE tc.plan_id = w.plan_id
@@ -684,10 +701,13 @@ export const files = pgTable(
         (
           ${table.messageId} IS NOT NULL AND EXISTS (
             SELECT 1 FROM messages m
-            JOIN plans p ON p.id = m.plan_id
             WHERE m.id = ${table.messageId}
             AND (
-              p.user_id = current_setting('app.user_id', true)
+              EXISTS (
+                SELECT 1 FROM plans p
+                WHERE p.id = m.plan_id
+                AND p.user_id = current_setting('app.user_id', true)
+              )
               OR EXISTS (
                 SELECT 1 FROM trusted_contacts tc
                 WHERE tc.plan_id = m.plan_id
@@ -704,10 +724,13 @@ export const files = pgTable(
         (
           ${table.entryId} IS NOT NULL AND EXISTS (
             SELECT 1 FROM entries e
-            JOIN plans p ON p.id = e.plan_id
             WHERE e.id = ${table.entryId}
             AND (
-              p.user_id = current_setting('app.user_id', true)
+              EXISTS (
+                SELECT 1 FROM plans p
+                WHERE p.id = e.plan_id
+                AND p.user_id = current_setting('app.user_id', true)
+              )
               OR EXISTS (
                 SELECT 1 FROM trusted_contacts tc
                 WHERE tc.plan_id = e.plan_id
@@ -723,10 +746,13 @@ export const files = pgTable(
         (
           ${table.wishId} IS NOT NULL AND EXISTS (
             SELECT 1 FROM wishes w
-            JOIN plans p ON p.id = w.plan_id
             WHERE w.id = ${table.wishId}
             AND (
-              p.user_id = current_setting('app.user_id', true)
+              EXISTS (
+                SELECT 1 FROM plans p
+                WHERE p.id = w.plan_id
+                AND p.user_id = current_setting('app.user_id', true)
+              )
               OR EXISTS (
                 SELECT 1 FROM trusted_contacts tc
                 WHERE tc.plan_id = w.plan_id
@@ -742,10 +768,13 @@ export const files = pgTable(
         (
           ${table.messageId} IS NOT NULL AND EXISTS (
             SELECT 1 FROM messages m
-            JOIN plans p ON p.id = m.plan_id
             WHERE m.id = ${table.messageId}
             AND (
-              p.user_id = current_setting('app.user_id', true)
+              EXISTS (
+                SELECT 1 FROM plans p
+                WHERE p.id = m.plan_id
+                AND p.user_id = current_setting('app.user_id', true)
+              )
               OR EXISTS (
                 SELECT 1 FROM trusted_contacts tc
                 WHERE tc.plan_id = m.plan_id
@@ -759,6 +788,265 @@ export const files = pgTable(
         )
       `,
     }),
+  ],
+).enableRLS();
+
+// =============================================================================
+// USER KEYS (E2EE)
+// =============================================================================
+
+/**
+ * User Keys table - stores ECDH P-256 public keys for E2EE key exchange
+ *
+ * Each user can have multiple public keys (one per device + recovery keys).
+ * Key types:
+ * - 'device': keys generated on user devices
+ * - 'recovery': offline recovery keys (PDF/QR/password manager)
+ *
+ * Any authenticated user can read any public key (they are public by
+ * definition), but only the owner can insert or update their own keys.
+ * The (userId, keyVersion) pair is unique across all keys for a user.
+ */
+export const userKeys = pgTable(
+  'user_keys',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    publicKey: text('public_key').notNull(), // Base64-encoded SPKI public key
+    keyVersion: integer('key_version').notNull(), // Server-assigned, monotonically increasing per user
+    keyType: text('key_type').notNull(), // 'device' | 'recovery'
+    deviceLabel: text('device_label'), // e.g. "iPhone 15", nullable
+    isActive: boolean('is_active').notNull().default(true),
+    deactivatedAt: timestamp('deactivated_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('user_keys_user_id_key_version_idx').on(
+      table.userId,
+      table.keyVersion,
+    ),
+    index('user_keys_user_id_idx').on(table.userId),
+    shouldBypassRlsPolicy(),
+    // Any authenticated user can read public keys (needed for key exchange)
+    pgPolicy('user_keys_select', {
+      for: 'select',
+      to: 'public',
+      using: sql`current_setting('app.user_id', true) IS NOT NULL`,
+    }),
+    // Only the key owner can insert/update/delete
+    pgPolicy('user_keys_modify', {
+      for: 'all',
+      to: 'public',
+      using: isCurrentUser(table.userId),
+      withCheck: isCurrentUser(table.userId),
+    }),
+  ],
+).enableRLS();
+
+// =============================================================================
+// ENCRYPTED DEKs (E2EE)
+// =============================================================================
+
+/**
+ * Encrypted DEKs table - stores encrypted Data Encryption Key copies
+ *
+ * Each plan has its own DEK for encrypting data. Copies of this DEK
+ * are encrypted with different recipients' public keys:
+ * - 'device': encrypted with one of the owner's device public keys
+ * - 'recovery': encrypted with the owner's recovery public key
+ * - 'contact': encrypted with a trusted contact's public key
+ * - 'escrow': encrypted with KMS for recovery (created only via /encryption/escrow)
+ *
+ * UNIQUE on (plan_id, owner_id, recipient_id, key_version, dek_type)
+ * allows one copy per plan+owner+recipient+keyVersion+type combination,
+ * supporting multiple device keys per user and per-plan DEK isolation.
+ */
+export const encryptedDeks = pgTable(
+  'encrypted_deks',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    planId: uuid('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    recipientId: text('recipient_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    dekType: text('dek_type').notNull(), // 'device' | 'recovery' | 'contact' | 'escrow'
+    encryptedDek: text('encrypted_dek').notNull(), // Base64-encoded ciphertext
+    keyVersion: integer('key_version').notNull(), // Matches recipient's key version used
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('encrypted_deks_plan_owner_recipient_kv_type_idx').on(
+      table.planId,
+      table.ownerId,
+      table.recipientId,
+      table.keyVersion,
+      table.dekType,
+    ),
+    index('encrypted_deks_plan_id_idx').on(table.planId),
+    index('encrypted_deks_owner_id_idx').on(table.ownerId),
+    index('encrypted_deks_recipient_id_idx').on(table.recipientId),
+    shouldBypassRlsPolicy(),
+    // Owner can manage all DEK copies for their data
+    // INSERT also requires that the plan belongs to the owner (prevents orphaned DEKs)
+    pgPolicy('encrypted_deks_owner', {
+      for: 'all',
+      to: 'public',
+      using: isCurrentUser(table.ownerId),
+      withCheck: sql`${isCurrentUser(table.ownerId)} AND ${userOwnsPlan(table.planId)}`,
+    }),
+    // Recipients can read their own DEK copy
+    pgPolicy('encrypted_deks_recipient_read', {
+      for: 'select',
+      to: 'public',
+      using: isCurrentUser(table.recipientId),
+    }),
+  ],
+).enableRLS();
+
+// =============================================================================
+// KEY RECOVERY EVENTS (E2EE)
+// =============================================================================
+
+/**
+ * Key Recovery Events table - audit trail for KMS recovery operations
+ *
+ * Logs all recovery attempts with IP address, user agent, and details
+ * for security auditing. Users can view their own recovery history.
+ */
+export type KeyRecoveryEventType =
+  | 'recovery_key_registered'
+  | 'recovery_key_deregistered'
+  | 'escrow_revoked'
+  | 'escrow_recovery_initiated'
+  | 'escrow_recovery_completed'
+  | 'escrow_recovery_failed';
+
+export const keyRecoveryEvents = pgTable(
+  'key_recovery_events',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    eventType: text('event_type').notNull().$type<KeyRecoveryEventType>(), // see KeyRecoveryEventType
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    details: jsonb('details'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index('key_recovery_events_user_id_idx').on(table.userId),
+    shouldBypassRlsPolicy(),
+    // Users can read their own recovery events
+    pgPolicy('key_recovery_events_select', {
+      for: 'select',
+      to: 'public',
+      using: isCurrentUser(table.userId),
+    }),
+    // Users can insert their own recovery events (service context)
+    pgPolicy('key_recovery_events_insert', {
+      for: 'insert',
+      to: 'public',
+      withCheck: isCurrentUser(table.userId),
+    }),
+  ],
+).enableRLS();
+
+// =============================================================================
+// DEVICE LINKING SESSIONS (E2EE)
+// =============================================================================
+
+/**
+ * Device Linking Sessions table - QR handshake signaling for device key transfer
+ *
+ * Ephemeral sessions for transferring encrypted key material between devices.
+ * Sessions expire after 5 minutes and are cleaned up hourly.
+ *
+ * Flow:
+ * 1. Source device creates session (status: 'pending'), gets session code
+ * 2. New device scans QR code containing session code
+ * 3. Source device deposits encrypted key material (status: 'claimed')
+ * 4. New device retrieves payload (status: 'completed')
+ */
+export const deviceLinkingSessions = pgTable(
+  'device_linking_sessions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    sessionCode: text('session_code').notNull().unique(), // Random 16-byte base64url
+    payload: text('payload'), // Encrypted key material from source device
+    status: text('status').notNull().default('pending'), // 'pending' | 'claimed' | 'completed' | 'expired'
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index('device_linking_sessions_user_id_idx').on(table.userId),
+    index('device_linking_sessions_session_code_idx').on(table.sessionCode),
+    index('device_linking_sessions_expires_at_idx').on(table.expiresAt),
+    shouldBypassRlsPolicy(),
+    // Only own user can access their sessions
+    isCurrentUserPolicy(table.userId),
+  ],
+).enableRLS();
+
+// =============================================================================
+// PUSH TOKENS
+// =============================================================================
+
+/**
+ * Push Tokens table - stores Expo push notification tokens
+ *
+ * Each user can have multiple push tokens (one per device).
+ * Uses isCurrentUserPolicy so users manage their own tokens,
+ * plus shouldBypassRlsPolicy so the system can look up tokens
+ * for other users when sending notifications.
+ */
+export const pushTokens = pgTable(
+  'push_tokens',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    token: text('token').notNull().unique(),
+    platform: text('platform'), // 'ios' | 'android'
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index('push_tokens_user_id_idx').on(table.userId),
+    shouldBypassRlsPolicy(),
+    isCurrentUserPolicy(table.userId),
   ],
 ).enableRLS();
 
@@ -795,3 +1083,18 @@ export type NewProgress = typeof progress.$inferInsert;
 
 export type File = typeof files.$inferSelect;
 export type NewFile = typeof files.$inferInsert;
+
+export type UserKey = typeof userKeys.$inferSelect;
+export type NewUserKey = typeof userKeys.$inferInsert;
+
+export type EncryptedDek = typeof encryptedDeks.$inferSelect;
+export type NewEncryptedDek = typeof encryptedDeks.$inferInsert;
+
+export type KeyRecoveryEvent = typeof keyRecoveryEvents.$inferSelect;
+export type NewKeyRecoveryEvent = typeof keyRecoveryEvents.$inferInsert;
+
+export type DeviceLinkingSession = typeof deviceLinkingSessions.$inferSelect;
+export type NewDeviceLinkingSession = typeof deviceLinkingSessions.$inferInsert;
+
+export type PushToken = typeof pushTokens.$inferSelect;
+export type NewPushToken = typeof pushTokens.$inferInsert;

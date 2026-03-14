@@ -3,7 +3,6 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { ApiClsService } from '../lib/api-cls.service';
 import { FilesController } from './files.controller';
 import { FilesService } from './files.service';
-import { MuxService } from './mux.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
 
 describe('FilesController', () => {
@@ -11,7 +10,6 @@ describe('FilesController', () => {
 
   const mockFilesService = {
     initiateUpload: jest.fn(),
-    initiateVideoUpload: jest.fn(),
     completeUpload: jest.fn(),
     findAllForEntry: jest.fn(),
     findOne: jest.fn(),
@@ -20,10 +18,7 @@ describe('FilesController', () => {
     revokeShareLink: jest.fn(),
     remove: jest.fn(),
     accessSharedFile: jest.fn(),
-    handleMuxWebhook: jest.fn(),
   };
-
-  const mockMuxService = {};
 
   const mockEntitlementsService = {
     canUseQuota: jest.fn().mockResolvedValue({ allowed: true }),
@@ -42,10 +37,6 @@ describe('FilesController', () => {
         {
           provide: FilesService,
           useValue: mockFilesService,
-        },
-        {
-          provide: MuxService,
-          useValue: mockMuxService,
         },
         {
           provide: EntitlementsService,
