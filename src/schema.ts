@@ -647,16 +647,23 @@ export const files = pgTable(
     index('files_parent_file_id_idx').on(table.parentFileId),
     index('files_share_token_idx').on(table.shareToken),
     shouldBypassRlsPolicy(),
+    // Files RLS: uses separate EXISTS subqueries (not JOIN) for the owner
+    // and trusted-contact checks. A JOIN to plans would fail for trusted
+    // contacts because plans' RLS is owner-only, filtering out the joined
+    // row before the OR clause can evaluate the trusted_contacts branch.
     crudPolicy({
       role: 'public',
       read: sql`
         (
           ${table.entryId} IS NOT NULL AND EXISTS (
             SELECT 1 FROM entries e
-            JOIN plans p ON p.id = e.plan_id
             WHERE e.id = ${table.entryId}
             AND (
-              p.user_id = current_setting('app.user_id', true)
+              EXISTS (
+                SELECT 1 FROM plans p
+                WHERE p.id = e.plan_id
+                AND p.user_id = current_setting('app.user_id', true)
+              )
               OR EXISTS (
                 SELECT 1 FROM trusted_contacts tc
                 WHERE tc.plan_id = e.plan_id
@@ -672,10 +679,13 @@ export const files = pgTable(
         (
           ${table.wishId} IS NOT NULL AND EXISTS (
             SELECT 1 FROM wishes w
-            JOIN plans p ON p.id = w.plan_id
             WHERE w.id = ${table.wishId}
             AND (
-              p.user_id = current_setting('app.user_id', true)
+              EXISTS (
+                SELECT 1 FROM plans p
+                WHERE p.id = w.plan_id
+                AND p.user_id = current_setting('app.user_id', true)
+              )
               OR EXISTS (
                 SELECT 1 FROM trusted_contacts tc
                 WHERE tc.plan_id = w.plan_id
@@ -691,10 +701,13 @@ export const files = pgTable(
         (
           ${table.messageId} IS NOT NULL AND EXISTS (
             SELECT 1 FROM messages m
-            JOIN plans p ON p.id = m.plan_id
             WHERE m.id = ${table.messageId}
             AND (
-              p.user_id = current_setting('app.user_id', true)
+              EXISTS (
+                SELECT 1 FROM plans p
+                WHERE p.id = m.plan_id
+                AND p.user_id = current_setting('app.user_id', true)
+              )
               OR EXISTS (
                 SELECT 1 FROM trusted_contacts tc
                 WHERE tc.plan_id = m.plan_id
@@ -711,10 +724,13 @@ export const files = pgTable(
         (
           ${table.entryId} IS NOT NULL AND EXISTS (
             SELECT 1 FROM entries e
-            JOIN plans p ON p.id = e.plan_id
             WHERE e.id = ${table.entryId}
             AND (
-              p.user_id = current_setting('app.user_id', true)
+              EXISTS (
+                SELECT 1 FROM plans p
+                WHERE p.id = e.plan_id
+                AND p.user_id = current_setting('app.user_id', true)
+              )
               OR EXISTS (
                 SELECT 1 FROM trusted_contacts tc
                 WHERE tc.plan_id = e.plan_id
@@ -730,10 +746,13 @@ export const files = pgTable(
         (
           ${table.wishId} IS NOT NULL AND EXISTS (
             SELECT 1 FROM wishes w
-            JOIN plans p ON p.id = w.plan_id
             WHERE w.id = ${table.wishId}
             AND (
-              p.user_id = current_setting('app.user_id', true)
+              EXISTS (
+                SELECT 1 FROM plans p
+                WHERE p.id = w.plan_id
+                AND p.user_id = current_setting('app.user_id', true)
+              )
               OR EXISTS (
                 SELECT 1 FROM trusted_contacts tc
                 WHERE tc.plan_id = w.plan_id
@@ -749,10 +768,13 @@ export const files = pgTable(
         (
           ${table.messageId} IS NOT NULL AND EXISTS (
             SELECT 1 FROM messages m
-            JOIN plans p ON p.id = m.plan_id
             WHERE m.id = ${table.messageId}
             AND (
-              p.user_id = current_setting('app.user_id', true)
+              EXISTS (
+                SELECT 1 FROM plans p
+                WHERE p.id = m.plan_id
+                AND p.user_id = current_setting('app.user_id', true)
+              )
               OR EXISTS (
                 SELECT 1 FROM trusted_contacts tc
                 WHERE tc.plan_id = m.plan_id
