@@ -53,6 +53,16 @@ export class EncryptionService {
     const userId = this.cls.requireUserId();
 
     return this.db.rls(async (tx) => {
+      // Verify plan ownership before inserting DEK
+      const [plan] = await tx
+        .select({ id: plans.id })
+        .from(plans)
+        .where(eq(plans.id, dto.planId));
+
+      if (!plan) {
+        throw new NotFoundException('Plan not found');
+      }
+
       const [existing] = await tx
         .select({ id: userKeys.id })
         .from(userKeys)
@@ -330,6 +340,16 @@ export class EncryptionService {
     const ownerId = this.cls.requireUserId();
 
     const dek = await this.db.rls(async (tx) => {
+      // Verify plan ownership before inserting DEK
+      const [plan] = await tx
+        .select({ id: plans.id })
+        .from(plans)
+        .where(eq(plans.id, dto.planId));
+
+      if (!plan) {
+        throw new NotFoundException('Plan not found');
+      }
+
       // For contact DEKs, verify the recipient is a trusted contact on this plan
       if (dto.dekType === 'contact' && dto.recipientId !== ownerId) {
         const [contact] = await tx
@@ -442,6 +462,16 @@ export class EncryptionService {
     const ownerId = this.cls.requireUserId();
 
     return this.db.rls(async (tx) => {
+      // Verify plan ownership before rotating DEKs
+      const [plan] = await tx
+        .select({ id: plans.id })
+        .from(plans)
+        .where(eq(plans.id, dto.planId));
+
+      if (!plan) {
+        throw new NotFoundException('Plan not found');
+      }
+
       // Validate that all (recipientId, keyVersion) pairs reference active user keys
       const uniqueKeyPairs = [
         ...new Map(
@@ -625,6 +655,18 @@ export class EncryptionService {
    */
   async enableEscrow(dto: EnableEscrowDto) {
     const userId = this.cls.requireUserId();
+
+    // Verify plan ownership before expensive KMS call
+    await this.db.rls(async (tx) => {
+      const [plan] = await tx
+        .select({ id: plans.id })
+        .from(plans)
+        .where(eq(plans.id, dto.planId));
+
+      if (!plan) {
+        throw new NotFoundException('Plan not found');
+      }
+    });
 
     // Verify the ciphertext is valid RSA-OAEP by trial-decrypting, then discard
     const encryptedBuffer = Buffer.from(dto.encryptedDek, 'base64');

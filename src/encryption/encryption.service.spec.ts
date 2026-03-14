@@ -10,6 +10,23 @@ import { ApiClsService } from '../lib/api-cls.service';
 import { EmailService } from '../email/email.service';
 import { PushNotificationsService } from '../push-notifications/push-notifications.service';
 import { KmsService } from './kms.service';
+import { SetupEncryptionDto } from './dto/setup-encryption.dto';
+import { EnableEscrowDto } from './dto/enable-escrow.dto';
+import { StoreEncryptedDekDto } from './dto/store-encrypted-dek.dto';
+
+/** Helper: creates a chainable mock that resolves to `result` at the terminal method. */
+function mockSelectChain(result: unknown[]) {
+  return {
+    from: jest.fn().mockReturnValue({
+      where: jest.fn().mockResolvedValue(result),
+    }),
+  };
+}
+
+/** Helper: flushes pending microtasks (fire-and-forget promises). */
+function flushPromises() {
+  return new Promise((resolve) => process.nextTick(resolve));
+}
 
 describe('EncryptionService', () => {
   let service: EncryptionService;
@@ -379,10 +396,100 @@ describe('EncryptionService', () => {
   });
 
   // =========================================================================
+  // setupEncryption
+  // =========================================================================
+
+  describe('setupEncryption', () => {
+    const dto: SetupEncryptionDto = {
+      publicKey: 'test-public-key',
+      planId: 'plan-123',
+      encryptedDek: 'encrypted-dek-data',
+      deviceLabel: 'My Phone',
+    };
+
+    it('should register key and store DEK for owned plan', async () => {
+      const mockKey = { keyVersion: 1 };
+      const mockDek = { id: 'dek-1' };
+
+      mockDbService.rls.mockImplementation(async (cb) => {
+        const tx = {
+          // Call 1: plan ownership check → found
+          // Call 2: existing key check → not found
+          select: jest
+            .fn()
+            .mockReturnValueOnce(mockSelectChain([{ id: 'plan-123' }]))
+            .mockReturnValueOnce(mockSelectChain([])),
+          insert: jest.fn().mockReturnValue({
+            values: jest.fn().mockReturnValue({
+              returning: jest.fn().mockResolvedValue([mockKey]),
+            }),
+          }),
+        };
+        // insert is called twice (userKeys then encryptedDeks) but both
+        // use the same mock chain since returning() resolves differently
+        // per call — we handle this by mocking insert to return once for
+        // key and once for dek
+        tx.insert = jest
+          .fn()
+          .mockReturnValueOnce({
+            values: jest.fn().mockReturnValue({
+              returning: jest.fn().mockResolvedValue([mockKey]),
+            }),
+          })
+          .mockReturnValueOnce({
+            values: jest.fn().mockReturnValue({
+              returning: jest.fn().mockResolvedValue([mockDek]),
+            }),
+          });
+        return cb(tx);
+      });
+
+      const result = await service.setupEncryption(dto);
+      expect(result).toEqual({ keyVersion: 1, dekId: 'dek-1' });
+    });
+
+    it('should throw NotFoundException if plan not owned', async () => {
+      mockDbService.rls.mockImplementation(async (cb) => {
+        const tx = {
+          select: jest.fn().mockReturnValue(mockSelectChain([])),
+        };
+        return cb(tx);
+      });
+
+      await expect(service.setupEncryption(dto)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should throw ConflictException if keys already exist', async () => {
+      mockDbService.rls.mockImplementation(async (cb) => {
+        const tx = {
+          // Call 1: plan ownership → found
+          // Call 2: existing key check → already exists
+          select: jest
+            .fn()
+            .mockReturnValueOnce(mockSelectChain([{ id: 'plan-123' }]))
+            .mockReturnValueOnce(mockSelectChain([{ id: 'existing-key' }])),
+        };
+        return cb(tx);
+      });
+
+      await expect(service.setupEncryption(dto)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+  });
+
+  // =========================================================================
   // enableEscrow
   // =========================================================================
 
   describe('enableEscrow', () => {
+    const dto: EnableEscrowDto = {
+      planId: 'plan-123',
+      encryptedDek: 'client-rsa-oaep-ciphertext',
+    };
+
     it('should verify ciphertext via KMS and store client-encrypted DEK', async () => {
       const mockDek = {
         id: 'dek-1',
@@ -397,18 +504,28 @@ describe('EncryptionService', () => {
       // Mock KMS trial decryption (verification step)
       mockKmsService.decryptDek.mockResolvedValue(Buffer.from('plaintext-dek'));
 
-      mockDbService.rls.mockImplementation(async (cb) => {
-        const tx = {
-          insert: jest.fn().mockReturnValue({
-            values: jest.fn().mockReturnValue({
-              onConflictDoUpdate: jest.fn().mockReturnValue({
-                returning: jest.fn().mockResolvedValue([mockDek]),
+      // enableEscrow makes two db.rls calls:
+      // 1st: plan ownership check
+      // 2nd: DEK insert
+      mockDbService.rls
+        .mockImplementationOnce(async (cb) => {
+          const tx = {
+            select: jest.fn().mockReturnValue(mockSelectChain([{ id: 'plan-123' }])),
+          };
+          return cb(tx);
+        })
+        .mockImplementationOnce(async (cb) => {
+          const tx = {
+            insert: jest.fn().mockReturnValue({
+              values: jest.fn().mockReturnValue({
+                onConflictDoUpdate: jest.fn().mockReturnValue({
+                  returning: jest.fn().mockResolvedValue([mockDek]),
+                }),
               }),
             }),
-          }),
-        };
-        return cb(tx);
-      });
+          };
+          return cb(tx);
+        });
 
       // Mock bypassRls for the email notification
       mockDbService.bypassRls.mockImplementation(async (cb) => {
@@ -426,23 +543,42 @@ describe('EncryptionService', () => {
         return cb(tx);
       });
 
-      const result = await service.enableEscrow({
-        planId: 'plan-123',
-        encryptedDek: 'client-rsa-oaep-ciphertext',
-      } as any);
+      const result = await service.enableEscrow(dto);
 
       expect(result).toEqual({ id: 'dek-1', enabled: true });
-      // Server should call KMS decrypt to verify the ciphertext
       expect(mockKmsService.decryptDek).toHaveBeenCalledTimes(1);
+    });
+
+    it('should throw NotFoundException if plan not owned', async () => {
+      mockDbService.rls.mockImplementation(async (cb) => {
+        const tx = {
+          select: jest.fn().mockReturnValue(mockSelectChain([])),
+        };
+        return cb(tx);
+      });
+
+      await expect(service.enableEscrow(dto)).rejects.toThrow(
+        NotFoundException,
+      );
+      // KMS should NOT be called when plan ownership fails
+      expect(mockKmsService.decryptDek).not.toHaveBeenCalled();
     });
   });
 
   // =========================================================================
-  // storeEncryptedDek — push notification side effect
+  // storeEncryptedDek
   // =========================================================================
 
   describe('storeEncryptedDek', () => {
     it('should send push notification when storing a contact DEK for another user', async () => {
+      const dto: StoreEncryptedDekDto = {
+        planId: 'plan-1',
+        recipientId: 'other-user',
+        dekType: 'contact',
+        encryptedDek: 'enc',
+        keyVersion: 1,
+      };
+
       const mockDek = {
         id: 'dek-1',
         planId: 'plan-1',
@@ -455,13 +591,18 @@ describe('EncryptionService', () => {
 
       mockDbService.rls.mockImplementation(async (cb) => {
         const tx = {
-          select: jest.fn().mockReturnValue({
-            from: jest.fn().mockReturnValue({
-              where: jest.fn().mockReturnValue({
-                limit: jest.fn().mockResolvedValue([{ id: 'tc-1' }]),
+          // Call 1: plan ownership check → found
+          // Call 2: trusted contact check → found
+          select: jest
+            .fn()
+            .mockReturnValueOnce(mockSelectChain([{ id: 'plan-1' }]))
+            .mockReturnValueOnce({
+              from: jest.fn().mockReturnValue({
+                where: jest.fn().mockReturnValue({
+                  limit: jest.fn().mockResolvedValue([{ id: 'tc-1' }]),
+                }),
               }),
             }),
-          }),
           insert: jest.fn().mockReturnValue({
             values: jest.fn().mockReturnValue({
               onConflictDoUpdate: jest.fn().mockReturnValue({
@@ -487,16 +628,9 @@ describe('EncryptionService', () => {
         return cb(tx);
       });
 
-      await service.storeEncryptedDek({
-        planId: 'plan-1',
-        recipientId: 'other-user',
-        dekType: 'contact',
-        encryptedDek: 'enc',
-        keyVersion: 1,
-      } as any);
+      await service.storeEncryptedDek(dto);
 
-      // Wait for fire-and-forget notification
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await flushPromises();
 
       expect(mockPushNotificationsService.sendToUser).toHaveBeenCalledWith(
         'other-user',
@@ -507,6 +641,14 @@ describe('EncryptionService', () => {
     });
 
     it('should not send push notification for own device DEK', async () => {
+      const dto: StoreEncryptedDekDto = {
+        planId: 'plan-1',
+        recipientId: 'user-123',
+        dekType: 'device',
+        encryptedDek: 'enc',
+        keyVersion: 1,
+      };
+
       const mockDek = {
         id: 'dek-1',
         planId: 'plan-1',
@@ -519,6 +661,8 @@ describe('EncryptionService', () => {
 
       mockDbService.rls.mockImplementation(async (cb) => {
         const tx = {
+          // Only plan ownership check (no contact check for own device DEK)
+          select: jest.fn().mockReturnValue(mockSelectChain([{ id: 'plan-1' }])),
           insert: jest.fn().mockReturnValue({
             values: jest.fn().mockReturnValue({
               onConflictDoUpdate: jest.fn().mockReturnValue({
@@ -530,15 +674,30 @@ describe('EncryptionService', () => {
         return cb(tx);
       });
 
-      await service.storeEncryptedDek({
+      await service.storeEncryptedDek(dto);
+
+      expect(mockPushNotificationsService.sendToUser).not.toHaveBeenCalled();
+    });
+
+    it('should throw NotFoundException if plan not owned', async () => {
+      const dto: StoreEncryptedDekDto = {
         planId: 'plan-1',
         recipientId: 'user-123',
         dekType: 'device',
         encryptedDek: 'enc',
         keyVersion: 1,
-      } as any);
+      };
 
-      expect(mockPushNotificationsService.sendToUser).not.toHaveBeenCalled();
+      mockDbService.rls.mockImplementation(async (cb) => {
+        const tx = {
+          select: jest.fn().mockReturnValue(mockSelectChain([])),
+        };
+        return cb(tx);
+      });
+
+      await expect(service.storeEncryptedDek(dto)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
