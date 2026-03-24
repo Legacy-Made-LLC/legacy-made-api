@@ -372,7 +372,7 @@ describe('EncryptionService', () => {
       // Should not contain firstName, lastName, or deviceLabel
       expect(result).not.toHaveProperty('firstName');
       expect(result).not.toHaveProperty('lastName');
-      if ('keys' in result) {
+      if ('keys' in result && result.keys) {
         for (const key of result.keys) {
           expect(key).not.toHaveProperty('deviceLabel');
         }

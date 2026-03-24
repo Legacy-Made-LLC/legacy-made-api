@@ -1,22 +1,22 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
-  BadRequestException,
 } from '@nestjs/common';
-import { eq, and, inArray } from 'drizzle-orm';
 import { randomBytes } from 'crypto';
-import { DbService, DrizzleTransaction } from '../db/db.service';
+import { and, eq, inArray } from 'drizzle-orm';
 import { ApiConfigService } from '../config/api-config.service';
+import { DbService, DrizzleTransaction } from '../db/db.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
-import { files, File, entries, wishes, messages } from '../schema';
-import { R2Service } from './r2.service';
+import { File, entries, files, messages, wishes } from '../schema';
 import {
-  InitiateUploadDto,
   CompleteUploadDto,
   CreateShareLinkDto,
   FileResponseDto,
+  InitiateUploadDto,
 } from './dto';
+import { R2Service } from './r2.service';
 
 // Part size for multipart uploads (100MB)
 const PART_SIZE = 100 * 1024 * 1024;
@@ -259,11 +259,11 @@ export class FilesService {
         );
       }
 
-      const [updated] = await tx
+      const [updated] = (await tx
         .update(files)
         .set({ uploadStatus: 'complete', updatedAt: new Date() })
         .where(eq(files.id, fileId))
-        .returning();
+        .returning()) as File[];
 
       return updated;
     });
@@ -276,7 +276,10 @@ export class FilesService {
    */
   async findAllForEntry(entryId: string): Promise<File[]> {
     return this.db.rls(async (tx) => {
-      return tx.select().from(files).where(eq(files.entryId, entryId));
+      return (await tx
+        .select()
+        .from(files)
+        .where(eq(files.entryId, entryId))) as File[];
     });
   }
 
@@ -288,11 +291,11 @@ export class FilesService {
     if (entryIds.length === 0) return [];
 
     return this.db.rls(async (tx) => {
-      return tx
+      return (await tx
         .select()
         .from(files)
         .where(inArray(files.entryId, entryIds))
-        .orderBy(files.createdAt);
+        .orderBy(files.createdAt)) as File[];
     });
   }
 
@@ -301,7 +304,10 @@ export class FilesService {
    */
   async findAllForWish(wishId: string): Promise<File[]> {
     return this.db.rls(async (tx) => {
-      return tx.select().from(files).where(eq(files.wishId, wishId));
+      return (await tx
+        .select()
+        .from(files)
+        .where(eq(files.wishId, wishId))) as File[];
     });
   }
 
@@ -313,11 +319,11 @@ export class FilesService {
     if (wishIds.length === 0) return [];
 
     return this.db.rls(async (tx) => {
-      return tx
+      return (await tx
         .select()
         .from(files)
         .where(inArray(files.wishId, wishIds))
-        .orderBy(files.createdAt);
+        .orderBy(files.createdAt)) as File[];
     });
   }
 
@@ -326,7 +332,10 @@ export class FilesService {
    */
   async findAllForMessage(messageId: string): Promise<File[]> {
     return this.db.rls(async (tx) => {
-      return tx.select().from(files).where(eq(files.messageId, messageId));
+      return (await tx
+        .select()
+        .from(files)
+        .where(eq(files.messageId, messageId))) as File[];
     });
   }
 
@@ -338,11 +347,11 @@ export class FilesService {
     if (messageIds.length === 0) return [];
 
     return this.db.rls(async (tx) => {
-      return tx
+      return (await tx
         .select()
         .from(files)
         .where(inArray(files.messageId, messageIds))
-        .orderBy(files.createdAt);
+        .orderBy(files.createdAt)) as File[];
     });
   }
 
@@ -420,7 +429,10 @@ export class FilesService {
   }
 
   private async findOneInTx(tx: DrizzleTransaction, id: string): Promise<File> {
-    const [file] = await tx.select().from(files).where(eq(files.id, id));
+    const [file] = (await tx
+      .select()
+      .from(files)
+      .where(eq(files.id, id))) as File[];
 
     if (!file) {
       throw new NotFoundException(`File with id ${id} not found`);
@@ -525,7 +537,7 @@ export class FilesService {
     return this.db.rls(async (tx) => {
       await this.findOneWithPillarCheck(tx, id, 'modify');
 
-      const [updated] = await tx
+      const [updated] = (await tx
         .update(files)
         .set({
           accessLevel: 'private',
@@ -534,7 +546,7 @@ export class FilesService {
           updatedAt: new Date(),
         })
         .where(eq(files.id, id))
-        .returning();
+        .returning()) as File[];
 
       return updated;
     });

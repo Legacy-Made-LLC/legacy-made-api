@@ -17,6 +17,9 @@ describe('FilesService', () => {
     entryId: 'entry-456',
     wishId: null,
     messageId: null,
+    role: 'primary',
+    parentFileId: null,
+    isEncrypted: false,
     filename: 'test.pdf',
     mimeType: 'application/pdf',
     sizeBytes: 1024,
@@ -84,6 +87,8 @@ describe('FilesService', () => {
         filename: 'test.pdf',
         mimeType: 'application/pdf',
         sizeBytes: 1024,
+        role: 'primary',
+        isEncrypted: false,
       };
 
       let selectCallCount = 0;
@@ -126,6 +131,8 @@ describe('FilesService', () => {
         filename: 'large-file.zip',
         mimeType: 'application/zip',
         sizeBytes: 150 * 1024 * 1024, // 150MB, over the 100MB threshold
+        role: 'primary',
+        isEncrypted: false,
       };
 
       let selectCallCount = 0;
@@ -171,6 +178,8 @@ describe('FilesService', () => {
         filename: 'test.pdf',
         mimeType: 'application/pdf',
         sizeBytes: 1024,
+        role: 'primary',
+        isEncrypted: false,
       };
 
       const mockTx = {
@@ -228,7 +237,7 @@ describe('FilesService', () => {
       const result = await service.completeUpload('file-123', {});
 
       expect(result.uploadStatus).toBe('complete');
-      expect(mockTx.update).toBeUndefined(); // Should not attempt update
+      expect((mockTx as any).update).toBeUndefined(); // Should not attempt update
     });
 
     it('should complete multipart upload with parts', async () => {

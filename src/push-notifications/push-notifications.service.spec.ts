@@ -10,7 +10,7 @@ jest.mock('expo-server-sdk', () => {
   const chunkPushNotifications = jest.fn((msgs: unknown[]) => [msgs]);
   const isExpoPushToken = jest.fn(() => true);
 
-  const MockExpo = jest.fn().mockImplementation(() => ({
+  const MockExpo: any = jest.fn().mockImplementation(() => ({
     sendPushNotificationsAsync,
     chunkPushNotifications,
   }));
