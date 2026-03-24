@@ -12,6 +12,7 @@ import { metadataSchemaSchema } from '../../common/dto/metadata-schema';
  * MetadataSchema is optional and defines the structure of the metadata field.
  */
 export const createEntrySchema = z.object({
+  id: z.uuid().optional(),
   taskKey: z.string().min(1),
   title: z.string().min(1).nullish(),
   notes: z.string().optional().nullable(),
