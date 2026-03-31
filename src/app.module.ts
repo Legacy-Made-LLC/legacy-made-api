@@ -27,6 +27,7 @@ import { ActivityLogModule } from './activity-log/activity-log.module';
 import { MessagesModule } from './messages/messages.module';
 import { EncryptionModule } from './encryption/encryption.module';
 import { PushNotificationsModule } from './push-notifications/push-notifications.module';
+import { PreferencesModule } from './preferences/preferences.module';
 
 @Module({
   imports: [
@@ -70,6 +71,7 @@ import { PushNotificationsModule } from './push-notifications/push-notifications
     ActivityLogModule,
     MessagesModule,
     EncryptionModule,
+    PreferencesModule,
   ],
   providers: [
     {

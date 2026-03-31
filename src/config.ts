@@ -3,6 +3,9 @@ import { z } from 'zod';
 export const configSchema = z.object({
   // GENERAL
   PORT: z.coerce.number().optional().default(3000),
+  NODE_ENV: z
+    .enum(['development', 'test', 'production'])
+    .default('development'),
 
   // DATABASE
   DATABASE_URL_APP: z.string(),
@@ -65,6 +68,11 @@ export const configSchema = z.object({
   // Optional: improves Expo rate limits and prevents token impersonation.
   // Push notifications work without it, but production deployments should set it.
   EXPO_ACCESS_TOKEN: z.string().optional(),
+  // FOR DEVELOPMENT: Only allow push notifications to these user IDs
+  PUSH_NOTIFICATION_ALLOWLIST: z
+    .string()
+    .optional()
+    .transform((val) => val?.split(',') ?? []),
 
   // FEATURE FLAGS
   GRANT_LIFETIME_TO_NEW_USERS: z
