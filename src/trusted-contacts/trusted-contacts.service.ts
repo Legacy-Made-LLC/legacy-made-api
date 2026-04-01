@@ -1,10 +1,10 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
-  BadRequestException,
 } from '@nestjs/common';
-import { eq, and } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { ApiConfigService } from '../config/api-config.service';
 import { DbService } from '../db/db.service';
@@ -13,10 +13,10 @@ import { EncryptionService } from '../encryption/encryption.service';
 import { AccessLevel } from '../lib/types/cls';
 import { PushNotificationsService } from '../push-notifications/push-notifications.service';
 import {
+  encryptedDeks,
+  plans,
   trustedContacts,
   users,
-  plans,
-  encryptedDeks,
   type TrustedContact,
 } from '../schema';
 import { CreateTrustedContactDto } from './dto/create-trusted-contact.dto';

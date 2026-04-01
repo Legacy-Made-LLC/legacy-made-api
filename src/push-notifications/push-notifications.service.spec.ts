@@ -3,6 +3,7 @@ import { PushNotificationsService } from './push-notifications.service';
 import { DbService } from '../db/db.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import { ApiConfigService } from '../config/api-config.service';
+import { PreferencesService } from '../preferences/preferences.service';
 
 // Mock expo-server-sdk — use inline jest.fn() to avoid hoisting issues
 jest.mock('expo-server-sdk', () => {
@@ -47,7 +48,15 @@ describe('PushNotificationsService', () => {
   };
 
   const mockConfigService = {
-    get: jest.fn().mockReturnValue(undefined),
+    get: jest.fn().mockImplementation((key: string) => {
+      if (key === 'NODE_ENV') return 'production';
+      if (key === 'PUSH_NOTIFICATION_ALLOWLIST') return [];
+      return undefined;
+    }),
+  };
+
+  const mockPreferencesService = {
+    ensurePreferencesExist: jest.fn().mockResolvedValue(undefined),
   };
 
   beforeEach(async () => {
@@ -57,6 +66,7 @@ describe('PushNotificationsService', () => {
         { provide: DbService, useValue: mockDbService },
         { provide: ApiClsService, useValue: mockClsService },
         { provide: ApiConfigService, useValue: mockConfigService },
+        { provide: PreferencesService, useValue: mockPreferencesService },
       ],
     }).compile();
 
@@ -186,16 +196,27 @@ describe('PushNotificationsService', () => {
       expect(bypassCallCount).toBe(2);
     });
 
-    it('should not throw when Expo SDK fails', async () => {
+    it('should throw when Expo SDK fails', async () => {
       mockTokensForUser(['token-1']);
       mockSendPushNotificationsAsync.mockRejectedValue(
         new Error('Expo network error'),
       );
 
-      // Should not throw — errors are caught and logged
       await expect(
         service.sendToUser('user-1', 'Title', 'Body'),
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow('Expo network error');
+    });
+
+    it('should throw when user is not in allowlist (non-production)', async () => {
+      mockConfigService.get.mockImplementation((key: string) => {
+        if (key === 'NODE_ENV') return 'development';
+        if (key === 'PUSH_NOTIFICATION_ALLOWLIST') return ['other-user'];
+        return undefined;
+      });
+
+      await expect(
+        service.sendToUser('user-1', 'Title', 'Body'),
+      ).rejects.toThrow('not in allowlist');
     });
   });
 

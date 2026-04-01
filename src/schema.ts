@@ -1051,6 +1051,63 @@ export const pushTokens = pgTable(
 ).enableRLS();
 
 // =============================================================================
+// USER PREFERENCES
+// =============================================================================
+
+/**
+ * User Preferences table - per-user settings for timezone and notifications
+ *
+ * One row per user. Created on first preference write or timezone upsert.
+ * Never deleted. The notifications column is a JSONB blob keyed by
+ * notification type (reminders, invites, etc.) — validated at the
+ * application layer using Zod.
+ */
+export const userPreferences = pgTable(
+  'user_preferences',
+  {
+    userId: text('user_id')
+      .primaryKey()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    timezone: text('timezone').notNull().default('UTC'),
+    notifications: jsonb('notifications').notNull().default({}),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [shouldBypassRlsPolicy(), isCurrentUserPolicy(table.userId)],
+).enableRLS();
+
+// =============================================================================
+// NOTIFICATION LOG
+// =============================================================================
+
+/**
+ * Notification Log table - append-only record of sent notifications
+ *
+ * One row per send event. The scheduler joins this table to find each
+ * user's most recent reminder and checks whether enough time has elapsed
+ * based on their frequency preference. Only accessed by the scheduler
+ * via bypassRls — no user-facing endpoints.
+ */
+export const notificationLog = pgTable(
+  'notification_log',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    channel: text('channel').notNull(),
+    sentAt: timestamp('sent_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('notification_log_user_id_type_idx').on(table.userId, table.type),
+    shouldBypassRlsPolicy(),
+  ],
+).enableRLS();
+
+// =============================================================================
 // TYPE EXPORTS
 // =============================================================================
 
@@ -1098,3 +1155,9 @@ export type NewDeviceLinkingSession = typeof deviceLinkingSessions.$inferInsert;
 
 export type PushToken = typeof pushTokens.$inferSelect;
 export type NewPushToken = typeof pushTokens.$inferInsert;
+
+export type UserPreference = typeof userPreferences.$inferSelect;
+export type NewUserPreference = typeof userPreferences.$inferInsert;
+
+export type NotificationLogEntry = typeof notificationLog.$inferSelect;
+export type NewNotificationLogEntry = typeof notificationLog.$inferInsert;
