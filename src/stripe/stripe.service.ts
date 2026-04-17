@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Injectable } from '@nestjs/common';
 import Stripe from 'stripe';
 import { ApiConfigService } from 'src/config/api-config.service';
@@ -35,10 +36,13 @@ export class StripeService {
     email: string,
     userId: string,
   ): Promise<Stripe.Customer> {
-    return this.stripe.customers.create({
-      email,
-      metadata: { userId },
-    });
+    return this.stripe.customers.create(
+      {
+        email,
+        metadata: { userId },
+      },
+      { idempotencyKey: randomUUID() },
+    );
   }
 
   async createCheckoutSession(params: {
@@ -47,23 +51,29 @@ export class StripeService {
     successUrl: string;
     cancelUrl: string;
   }): Promise<Stripe.Checkout.Session> {
-    return this.stripe.checkout.sessions.create({
-      customer: params.customerId,
-      mode: 'subscription',
-      line_items: [{ price: params.priceId, quantity: 1 }],
-      success_url: params.successUrl,
-      cancel_url: params.cancelUrl,
-    });
+    return this.stripe.checkout.sessions.create(
+      {
+        customer: params.customerId,
+        mode: 'subscription',
+        line_items: [{ price: params.priceId, quantity: 1 }],
+        success_url: params.successUrl,
+        cancel_url: params.cancelUrl,
+      },
+      { idempotencyKey: randomUUID() },
+    );
   }
 
   async createPortalSession(
     customerId: string,
     returnUrl: string,
   ): Promise<Stripe.BillingPortal.Session> {
-    return this.stripe.billingPortal.sessions.create({
-      customer: customerId,
-      return_url: returnUrl,
-    });
+    return this.stripe.billingPortal.sessions.create(
+      {
+        customer: customerId,
+        return_url: returnUrl,
+      },
+      { idempotencyKey: randomUUID() },
+    );
   }
 
   constructWebhookEvent(payload: Buffer, signature: string): Stripe.Event {
