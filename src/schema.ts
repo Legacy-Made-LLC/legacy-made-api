@@ -18,6 +18,7 @@ import { crudPolicy } from 'drizzle-orm/neon';
 import {
   type AnyPgColumn,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -177,7 +178,9 @@ export const subscriptions = pgTable(
     stripeCustomerId: text('stripe_customer_id'),
     stripeSubscriptionId: text('stripe_subscription_id'),
     stripePriceId: text('stripe_price_id'),
-    status: text('status'), // 'active' | 'past_due' | 'canceled' | 'trialing'
+    // Nullable: rows created before the Stripe integration have NULL status.
+    // The check constraint allows NULL or one of the four valid values.
+    status: text('status'),
     currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
 
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -192,6 +195,12 @@ export const subscriptions = pgTable(
     index('subscriptions_user_id_idx').on(table.userId),
     index('subscriptions_stripe_subscription_id_idx').on(
       table.stripeSubscriptionId,
+    ),
+    // Null is allowed (pre-Stripe rows) but any non-null value must be one
+    // of the four Stripe subscription statuses we care about.
+    check(
+      'subscriptions_status_check',
+      sql`${table.status} IS NULL OR ${table.status} IN ('active', 'past_due', 'canceled', 'trialing')`,
     ),
     shouldBypassRlsPolicy(),
     isCurrentUserPolicy(table.userId),

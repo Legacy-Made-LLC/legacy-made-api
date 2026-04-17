@@ -1,0 +1,1 @@
+ALTER TABLE "subscriptions" ADD CONSTRAINT "subscriptions_status_check" CHECK ("subscriptions"."status" IS NULL OR "subscriptions"."status" IN ('active', 'past_due', 'canceled', 'trialing'));

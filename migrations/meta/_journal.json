@@ -134,6 +134,13 @@
       "when": 1776452158519,
       "tag": "0018_add_stripe_subscription_id_index",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1776452260567,
+      "tag": "0019_constrain_subscription_status",
+      "breakpoints": true
     }
   ]
 }
