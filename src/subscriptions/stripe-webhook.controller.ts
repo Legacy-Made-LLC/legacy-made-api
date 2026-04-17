@@ -81,8 +81,9 @@ export class StripeWebhookController {
 
     const subscription =
       await this.stripeService.retrieveSubscription(stripeSubscriptionId);
-    const priceId = subscription.items.data[0]?.price.id;
-    if (!priceId) {
+    const item = subscription.items.data[0];
+    const priceId = item?.price.id;
+    if (!priceId || !item) {
       this.logger.error('No price ID found in subscription');
       return;
     }
@@ -111,15 +112,16 @@ export class StripeWebhookController {
       tier,
       stripeSubscriptionId,
       stripePriceId: priceId,
-      currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+      currentPeriodEnd: new Date(item.current_period_end * 1000),
     });
 
     this.logger.log(`Activated ${tier} subscription for user ${sub.userId}`);
   }
 
   private async handleSubscriptionUpdated(subscription: Stripe.Subscription) {
-    const priceId = subscription.items.data[0]?.price.id;
-    if (!priceId) return;
+    const item = subscription.items.data[0];
+    const priceId = item?.price.id;
+    if (!priceId || !item) return;
 
     const tier = this.stripeService.getTierForPriceId(priceId);
     if (!tier) {
@@ -132,7 +134,7 @@ export class StripeWebhookController {
       tier,
       stripePriceId: priceId,
       status: subscription.status,
-      currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+      currentPeriodEnd: new Date(item.current_period_end * 1000),
     });
 
     this.logger.log(
@@ -146,10 +148,16 @@ export class StripeWebhookController {
   }
 
   private async handlePaymentFailed(invoice: Stripe.Invoice) {
+    // Stripe SDK v20 / API 2025-04-30: invoice.subscription was removed in
+    // favor of invoice.parent.subscription_details.subscription.
+    const subscriptionRef =
+      invoice.parent?.type === 'subscription_details'
+        ? invoice.parent.subscription_details?.subscription
+        : undefined;
     const subscriptionId =
-      typeof invoice.subscription === 'string'
-        ? invoice.subscription
-        : invoice.subscription?.id;
+      typeof subscriptionRef === 'string'
+        ? subscriptionRef
+        : subscriptionRef?.id;
 
     if (!subscriptionId) return;
 
