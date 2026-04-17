@@ -98,17 +98,108 @@ See `src/subscriptions/stripe-webhook.controller.ts` and `src/subscriptions/subs
 
 ---
 
+## Dashboard setup (first-time)
+
+One-time configuration in the Stripe Dashboard before any integration test can run. Do all of this in **test mode** first (toggle in the top-right of the dashboard). Repeat the product/webhook steps in live mode at production cutover.
+
+### 1. Create the two products + prices
+
+Dashboard → **More** → **Product catalog** → **+ Add product**.
+
+Repeat for each tier:
+
+| Product name | Tier         | Env var that holds the price ID |
+| ------------ | ------------ | ------------------------------- |
+| `Individual` | `individual` | `STRIPE_PRICE_ID_INDIVIDUAL`    |
+| `Family`     | `family`     | `STRIPE_PRICE_ID_FAMILY`        |
+
+For each product:
+
+1. Name: e.g. `Individual` (customers will see this on the Checkout page and portal).
+2. (Optional) Description — shown at checkout and in the portal.
+3. Pricing model: **Flat-rate pricing**.
+4. Pricing type: **Recurring** (not "One time").
+5. Billing period: start with **Monthly**. Add annual later if desired.
+6. Enter the price amount in USD (or your default currency).
+7. Click **Add product**.
+8. On the product detail page, copy the **Price ID** (starts with `price_…`). This goes into your env vars as `STRIPE_PRICE_ID_INDIVIDUAL` / `STRIPE_PRICE_ID_FAMILY`. **Do not use the Product ID (`prod_…`) — the code expects Price IDs.**
+
+### 2. Configure the Customer Portal
+
+Dashboard → **Settings** → **Billing** → **Customer portal** (direct URL: [dashboard.stripe.com/settings/billing/portal](https://dashboard.stripe.com/settings/billing/portal)).
+
+1. Under "Ways to get started," click **Activate link** (the no-code portal). Our code calls `billingPortal.sessions.create`, which requires the portal to be activated.
+2. **Features to enable:**
+   - **Cancel subscriptions** → "Cancel at end of billing period" (we rely on `customer.subscription.updated`/`deleted` webhooks to reconcile).
+   - **Switch plans** → add both the Individual and Family products so users can upgrade/downgrade between tiers.
+   - **Update payment method**.
+   - **Invoice history**.
+3. **Business information** (branding): the portal inherits your public business name and logo from Settings → Business → Branding. Make sure those are set.
+4. Click **Save**.
+
+### 3. Create a restricted API key
+
+Dashboard → **Developers** → **API keys** → **Create restricted key** ([dashboard.stripe.com/test/apikeys](https://dashboard.stripe.com/test/apikeys)).
+
+1. Name: e.g. `legacy-made-api`.
+2. Permissions (set each to **Read + Write**; leave everything else as **None**):
+   - **Customers**
+   - **Subscriptions**
+   - **Checkout Sessions**
+   - **Billing Portal**
+3. Confirm via email/SMS.
+4. Copy the key (starts with `rk_test_…`). **This is shown once — paste it into `.env` as `STRIPE_SECRET_KEY` immediately.**
+
+Prefer restricted keys over unrestricted `sk_test_…` — they limit blast radius if leaked.
+
+### 4. Register the webhook endpoint (for staging/prod)
+
+Local dev uses `stripe listen` and doesn't need a registered endpoint. Register one for any deployed environment (Railway staging, Railway prod).
+
+Dashboard → **Developers** → **Webhooks** → **Add endpoint**.
+
+1. Event source: **Account** (not Connected accounts).
+2. API version: pick the version pinned in our code — currently `2026-02-25.clover` (see `src/stripe/stripe.service.ts`). Matching versions avoids payload shape surprises.
+3. Events to listen for (exact names):
+   - `checkout.session.completed`
+   - `customer.subscription.updated`
+   - `customer.subscription.deleted`
+   - `invoice.payment_failed`
+4. Destination: **Webhook endpoint**. URL: `https://<your-api-host>/webhooks/stripe`.
+5. Description: e.g. `Legacy Made API — subscriptions lifecycle`.
+6. **Click to reveal** the signing secret (starts with `whsec_…`) and paste into the deployment's `STRIPE_WEBHOOK_SECRET`.
+
+### 5. Verify configuration
+
+Before wiring real flows:
+
+- `curl -u rk_test_…: https://api.stripe.com/v1/prices` → should return your two prices.
+- `curl -u rk_test_…: https://api.stripe.com/v1/customers` → should return an empty list in a fresh test account.
+- `stripe listen` in local dev should print the same signing secret you'll paste into `.env`.
+
+---
+
 ## Local development
 
-1. **Copy `.env.example` to `.env`** and fill in Stripe test-mode keys (`sk_test_*`, price IDs from your test dashboard).
+1. **Copy `.env.example` to `.env`** and fill in Stripe test-mode keys (`rk_test_*`, price IDs from your test dashboard — see [Dashboard setup](#dashboard-setup-first-time) above).
 
-2. **Install the Stripe CLI:**
+2. **Install the Stripe CLI.**
+
+   **Debian/Ubuntu (apt):**
+
+   ```bash
+   curl -s https://packages.stripe.dev/api/security/keypair/stripe-cli-gpg/public | gpg --dearmor | sudo tee /usr/share/keyrings/stripe.gpg > /dev/null
+   echo "deb [signed-by=/usr/share/keyrings/stripe.gpg] https://packages.stripe.dev/stripe-cli-debian-local stable main" | sudo tee -a /etc/apt/sources.list.d/stripe.list
+   sudo apt update && sudo apt install stripe
+   ```
+
+   **macOS (Homebrew):**
 
    ```bash
    brew install stripe/stripe-cli/stripe
    ```
 
-   (Or see [Stripe CLI installation docs](https://docs.stripe.com/stripe-cli) for other platforms.)
+   **Other platforms:** see [Stripe CLI installation docs](https://docs.stripe.com/stripe-cli/install).
 
 3. **Authenticate:**
 
@@ -125,13 +216,44 @@ See `src/subscriptions/stripe-webhook.controller.ts` and `src/subscriptions/subs
    On startup the CLI prints a signing secret like `whsec_abc123…`. Copy it into `.env` as `STRIPE_WEBHOOK_SECRET`, then restart the API.
 
 5. **Trigger events** to exercise handlers without going through the full checkout flow:
+
    ```bash
    stripe trigger checkout.session.completed
    stripe trigger customer.subscription.updated
    stripe trigger customer.subscription.deleted
    stripe trigger invoice.payment_failed
    ```
+
    Each triggers a real Stripe test-mode event that your `listen` terminal forwards to the API.
+
+6. **Replay a real event** to verify idempotency (dedupe via `processed_stripe_events`):
+
+   ```bash
+   stripe events resend <evt_id>
+   ```
+
+   The first delivery should process normally; the replay should log `Skipping replayed Stripe event` and return `{ received: true, deduped: true }`.
+
+### Mobile app against local API (ngrok)
+
+The mobile app in a simulator can't reach `localhost:3000` directly from a device, and any real-device testing needs HTTPS anyway. Use ngrok as a quick tunnel:
+
+```bash
+# One-time install (Debian/Ubuntu)
+curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+sudo apt update && sudo apt install ngrok
+
+# One-time auth — get your token from https://dashboard.ngrok.com/get-started/your-authtoken
+ngrok config add-authtoken <your-token>
+
+# Per-session: expose local API on a public HTTPS URL
+ngrok http 3000
+```
+
+Point the mobile app's API base URL at the ngrok URL (e.g. `https://1234-5-6-7-8.ngrok.io`) for the session. Stripe's `stripe listen` can still forward to `localhost:3000` — the webhook path stays local, only the app→API direction goes through the tunnel.
+
+**Universal link note:** ngrok URLs will not satisfy iOS universal-link validation (Apple requires AASA served from a stable domain listed in the app's `associatedDomains`). For local dev, either use the scheme-based fallback (`legacy-made://subscription/return`) or skip the deep-link leg and rely on the `useAppStateEntitlementRefresh` safety-net — when the user returns to the foregrounded app, entitlements refresh automatically. Full universal-link validation happens in staging/prod against a real domain.
 
 ---
 
