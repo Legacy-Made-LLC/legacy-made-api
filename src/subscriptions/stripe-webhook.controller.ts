@@ -29,49 +29,88 @@ export class StripeWebhookController {
     @RawBody() rawBody: Buffer,
     @Headers('stripe-signature') signature: string,
   ) {
+    const startedAt = Date.now();
+
     let event: Stripe.Event;
     try {
       event = this.stripeService.constructWebhookEvent(rawBody, signature);
     } catch (err) {
-      this.logger.error('Webhook signature verification failed', err);
+      this.logger.error(
+        {
+          msg: 'stripe_webhook',
+          outcome: 'invalid_signature',
+          durationMs: Date.now() - startedAt,
+        },
+        err instanceof Error ? err.stack : undefined,
+      );
       throw new BadRequestException('Invalid webhook signature');
     }
 
-    this.logger.log(`Received Stripe event: ${event.type} (${event.id})`);
+    const subscriptionId = extractSubscriptionId(event);
 
     // Short-circuit replays. Stripe retries on 5xx and network failures; if
     // we've already processed this event, acknowledge and skip the handlers.
     // If a handler below throws, we 5xx and the row is NOT inserted, so the
     // retry starts fresh.
     if (await this.subscriptionsService.isEventProcessed(event.id)) {
-      this.logger.log(`Skipping replayed Stripe event: ${event.id}`);
+      this.logger.log({
+        msg: 'stripe_webhook',
+        eventId: event.id,
+        eventType: event.type,
+        subscriptionId,
+        outcome: 'deduped',
+        durationMs: Date.now() - startedAt,
+      });
       return { received: true, deduped: true };
     }
 
     let outcome: 'handled' | 'skipped' = 'handled';
 
-    switch (event.type) {
-      case 'checkout.session.completed':
-        await this.handleCheckoutCompleted(
-          event.data.object as Stripe.Checkout.Session,
-        );
-        break;
-      case 'customer.subscription.updated':
-        await this.handleSubscriptionUpdated(
-          event.data.object as Stripe.Subscription,
-        );
-        break;
-      case 'customer.subscription.deleted':
-        await this.handleSubscriptionDeleted(
-          event.data.object as Stripe.Subscription,
-        );
-        break;
-      case 'invoice.payment_failed':
-        await this.handlePaymentFailed(event.data.object as Stripe.Invoice);
-        break;
-      default:
-        outcome = 'skipped';
-        this.logger.log(`Unhandled event type: ${event.type}`);
+    try {
+      switch (event.type) {
+        case 'checkout.session.completed':
+          await this.handleCheckoutCompleted(
+            event.data.object as Stripe.Checkout.Session,
+          );
+          break;
+        case 'customer.subscription.updated':
+          await this.handleSubscriptionUpdated(
+            event.data.object as Stripe.Subscription,
+          );
+          break;
+        case 'customer.subscription.deleted':
+          await this.handleSubscriptionDeleted(
+            event.data.object as Stripe.Subscription,
+          );
+          break;
+        case 'invoice.payment_failed':
+          await this.handlePaymentFailed(event.data.object as Stripe.Invoice);
+          break;
+        default:
+          outcome = 'skipped';
+          // Raise visibility: if Stripe introduces a new event type we should
+          // be handling, this shows up in log dashboards filtered to `warn`.
+          // (Sentry is not wired into this repo; escalate log level instead.)
+          this.logger.warn({
+            msg: 'stripe_webhook_unhandled_event',
+            eventId: event.id,
+            eventType: event.type,
+            subscriptionId,
+          });
+      }
+    } catch (err) {
+      this.logger.error(
+        {
+          msg: 'stripe_webhook',
+          eventId: event.id,
+          eventType: event.type,
+          subscriptionId,
+          outcome: 'error',
+          durationMs: Date.now() - startedAt,
+        },
+        err instanceof Error ? err.stack : undefined,
+      );
+      throw err;
     }
 
     await this.subscriptionsService.recordProcessedEvent(
@@ -79,6 +118,15 @@ export class StripeWebhookController {
       event.type,
       outcome,
     );
+
+    this.logger.log({
+      msg: 'stripe_webhook',
+      eventId: event.id,
+      eventType: event.type,
+      subscriptionId,
+      outcome,
+      durationMs: Date.now() - startedAt,
+    });
 
     return { received: true };
   }
@@ -187,5 +235,36 @@ export class StripeWebhookController {
   private async findSubscriptionByCustomerId(customerId: string) {
     // We store stripeCustomerId on the subscription record
     return this.subscriptionsService.findByStripeCustomerId(customerId);
+  }
+}
+
+/**
+ * Best-effort Stripe subscription id extraction across the event types we
+ * dispatch. Returned as structured-log metadata so a single event id can be
+ * correlated back to a subscription row. Returns `undefined` when the event
+ * payload doesn't carry one (e.g. unhandled event types).
+ */
+function extractSubscriptionId(event: Stripe.Event): string | undefined {
+  switch (event.type) {
+    case 'checkout.session.completed': {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const sub = session.subscription;
+      return typeof sub === 'string' ? sub : sub?.id;
+    }
+    case 'customer.subscription.updated':
+    case 'customer.subscription.deleted':
+      return (event.data.object as Stripe.Subscription).id;
+    case 'invoice.payment_failed': {
+      // Stripe SDK v20: invoice.subscription moved to
+      // invoice.parent.subscription_details.subscription.
+      const invoice = event.data.object as Stripe.Invoice;
+      const subRef =
+        invoice.parent?.type === 'subscription_details'
+          ? invoice.parent.subscription_details?.subscription
+          : undefined;
+      return typeof subRef === 'string' ? subRef : subRef?.id;
+    }
+    default:
+      return undefined;
   }
 }

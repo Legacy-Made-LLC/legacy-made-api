@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import Stripe from 'stripe';
 import { StripeService } from 'src/stripe/stripe.service';
@@ -115,7 +115,7 @@ describe('StripeWebhookController', () => {
   });
 
   describe('when the event type is not handled', () => {
-    it('records the event as skipped and returns { received: true }', async () => {
+    it('records the event as skipped, warns (raised visibility), and returns { received: true }', async () => {
       const unknownEvent = {
         id: 'evt_unknown_1',
         type: 'unknown.event',
@@ -123,6 +123,11 @@ describe('StripeWebhookController', () => {
       } as unknown as Stripe.Event;
 
       stripeService.constructWebhookEvent.mockReturnValue(unknownEvent);
+      // Spy on the Nest Logger; the controller raises unhandled events to
+      // `warn` so they surface in log dashboards filtered to warn/error.
+      const warnSpy = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
 
       const result = await controller.handleWebhook(
         Buffer.from('{}'),
@@ -135,11 +140,20 @@ describe('StripeWebhookController', () => {
         'unknown.event',
         'skipped',
       );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          msg: 'stripe_webhook_unhandled_event',
+          eventId: 'evt_unknown_1',
+          eventType: 'unknown.event',
+        }),
+      );
       // None of the concrete handler methods should have fired.
       expect(subscriptionsService.activateSubscription).not.toHaveBeenCalled();
       expect(subscriptionsService.updateFromStripe).not.toHaveBeenCalled();
       expect(subscriptionsService.cancelSubscription).not.toHaveBeenCalled();
       expect(subscriptionsService.markPastDue).not.toHaveBeenCalled();
+
+      warnSpy.mockRestore();
     });
   });
 
