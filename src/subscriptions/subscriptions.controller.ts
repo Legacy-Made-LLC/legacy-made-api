@@ -47,6 +47,7 @@ export class SubscriptionsController {
     }
 
     const baseUrl = this.config.get('APP_BASE_URL');
+    // Checkout is triggered from web (product decision: portal-only in app); web owns /settings/billing.
     const session = await this.stripeService.createCheckoutSession({
       customerId,
       priceId,
@@ -68,7 +69,7 @@ export class SubscriptionsController {
     const baseUrl = this.config.get('APP_BASE_URL');
     const session = await this.stripeService.createPortalSession(
       sub.stripeCustomerId,
-      `${baseUrl}/settings/billing`,
+      `${baseUrl}/subscription/return`,
     );
 
     return { url: session.url };
