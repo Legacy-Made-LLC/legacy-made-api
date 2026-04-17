@@ -190,6 +190,9 @@ export const subscriptions = pgTable(
   },
   (table) => [
     index('subscriptions_user_id_idx').on(table.userId),
+    index('subscriptions_stripe_subscription_id_idx').on(
+      table.stripeSubscriptionId,
+    ),
     shouldBypassRlsPolicy(),
     isCurrentUserPolicy(table.userId),
   ],

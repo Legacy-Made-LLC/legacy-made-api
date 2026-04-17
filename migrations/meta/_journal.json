@@ -127,6 +127,13 @@
       "when": 1776449789057,
       "tag": "0017_add_stripe_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1776452158519,
+      "tag": "0018_add_stripe_subscription_id_index",
+      "breakpoints": true
     }
   ]
 }
