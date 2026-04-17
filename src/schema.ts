@@ -1122,6 +1122,47 @@ export const notificationLog = pgTable(
 ).enableRLS();
 
 // =============================================================================
+// PROCESSED STRIPE EVENTS
+// =============================================================================
+
+/**
+ * Processed Stripe Events table - idempotency log for webhook delivery
+ *
+ * Stripe retries webhook deliveries on 5xx responses and network failures.
+ * Without dedup, a replayed event reruns every handler. We record completed
+ * events here (primary key = Stripe event id) and short-circuit replays at
+ * the top of the webhook handler.
+ *
+ * Outcomes:
+ * - 'handled': event type matched a case in the switch and processing completed
+ * - 'skipped': event type hit the default case (intentionally ignored)
+ *
+ * If a handler throws, we return 5xx to Stripe and do NOT insert — Stripe
+ * retries, and the next attempt starts fresh. Only successful completions
+ * land in this table.
+ *
+ * Accessed only by the webhook controller, which runs with @BypassJwtAuth()
+ * and therefore has no user context. We follow the `notification_log`
+ * pattern: only shouldBypassRlsPolicy() is applied, and the service uses
+ * the non-RLS drizzle handle (db.bypassRls).
+ */
+export const processedStripeEvents = pgTable(
+  'processed_stripe_events',
+  {
+    eventId: text('event_id').primaryKey(), // Stripe event id, e.g. evt_1PqR3s...
+    eventType: text('event_type').notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    outcome: text('outcome').notNull(), // 'handled' | 'skipped'
+  },
+  (table) => [
+    index('processed_stripe_events_received_at_idx').on(table.receivedAt),
+    shouldBypassRlsPolicy(),
+  ],
+).enableRLS();
+
+// =============================================================================
 // TYPE EXPORTS
 // =============================================================================
 
@@ -1175,3 +1216,6 @@ export type NewUserPreference = typeof userPreferences.$inferInsert;
 
 export type NotificationLogEntry = typeof notificationLog.$inferSelect;
 export type NewNotificationLogEntry = typeof notificationLog.$inferInsert;
+
+export type ProcessedStripeEvent = typeof processedStripeEvents.$inferSelect;
+export type NewProcessedStripeEvent = typeof processedStripeEvents.$inferInsert;

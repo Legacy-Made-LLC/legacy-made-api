@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { DbService } from 'src/db/db.service';
 import { ApiClsService } from 'src/lib/api-cls.service';
-import { subscriptions, users } from 'src/schema';
+import { processedStripeEvents, subscriptions, users } from 'src/schema';
 
 @Injectable()
 export class SubscriptionsService {
@@ -156,6 +156,37 @@ export class SubscriptionsService {
         .where(eq(subscriptions.stripeSubscriptionId, stripeSubscriptionId))
         .returning();
       return updated;
+    });
+  }
+
+  /**
+   * Check whether a Stripe event id has already been recorded as processed.
+   * Used by the webhook controller to short-circuit replayed deliveries.
+   */
+  async isEventProcessed(eventId: string): Promise<boolean> {
+    return this.db.bypassRls(async (tx) => {
+      const [row] = await tx
+        .select({ eventId: processedStripeEvents.eventId })
+        .from(processedStripeEvents)
+        .where(eq(processedStripeEvents.eventId, eventId));
+      return row !== undefined;
+    });
+  }
+
+  /**
+   * Record a successfully-processed Stripe event.
+   * Only call after the switch-case handler completes without throwing.
+   */
+  async recordProcessedEvent(
+    eventId: string,
+    eventType: string,
+    outcome: 'handled' | 'skipped',
+  ): Promise<void> {
+    await this.db.bypassRls(async (tx) => {
+      await tx
+        .insert(processedStripeEvents)
+        .values({ eventId, eventType, outcome })
+        .onConflictDoNothing({ target: processedStripeEvents.eventId });
     });
   }
 }
