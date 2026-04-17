@@ -37,7 +37,18 @@ export class StripeWebhookController {
       throw new BadRequestException('Invalid webhook signature');
     }
 
-    this.logger.log(`Received Stripe event: ${event.type}`);
+    this.logger.log(`Received Stripe event: ${event.type} (${event.id})`);
+
+    // Short-circuit replays. Stripe retries on 5xx and network failures; if
+    // we've already processed this event, acknowledge and skip the handlers.
+    // If a handler below throws, we 5xx and the row is NOT inserted, so the
+    // retry starts fresh.
+    if (await this.subscriptionsService.isEventProcessed(event.id)) {
+      this.logger.log(`Skipping replayed Stripe event: ${event.id}`);
+      return { received: true, deduped: true };
+    }
+
+    let outcome: 'handled' | 'skipped' = 'handled';
 
     switch (event.type) {
       case 'checkout.session.completed':
@@ -59,8 +70,15 @@ export class StripeWebhookController {
         await this.handlePaymentFailed(event.data.object as Stripe.Invoice);
         break;
       default:
+        outcome = 'skipped';
         this.logger.log(`Unhandled event type: ${event.type}`);
     }
+
+    await this.subscriptionsService.recordProcessedEvent(
+      event.id,
+      event.type,
+      outcome,
+    );
 
     return { received: true };
   }
