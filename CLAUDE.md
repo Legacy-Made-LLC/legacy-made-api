@@ -428,3 +428,8 @@ doSomething(@Req() req: Request) {
 ```
 
 `ApiClsService` also provides `requirePlanAccessRole()` and `requirePlanAccessLevel()` for plan-scoped authorization context.
+
+## Stripe
+
+- **Pinned API version:** `2026-02-25.clover` (pinned 2026-04-17, sourced from `node_modules/stripe/types/apiVersion.d.ts`'s `ApiVersion` constant — the SDK's `LatestApiVersion` for `stripe@^20.4.0`).
+- **Bump rule:** bumps are intentional, reviewed, and paired with SDK upgrades. When upgrading the `stripe` npm package, re-check `apiVersion.d.ts`, skim the Stripe API changelog between versions, and update the pinned string in `src/stripe/stripe.service.ts` in the same commit.

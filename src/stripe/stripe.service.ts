@@ -11,7 +11,10 @@ export class StripeService {
   private readonly tierToPrice: Map<SubscriptionTier, string>;
 
   constructor(private readonly config: ApiConfigService) {
-    this.stripe = new Stripe(this.config.get('STRIPE_SECRET_KEY'));
+    // Pinned intentionally. Bump alongside SDK upgrades — Stripe API changes can silently alter handler behavior.
+    this.stripe = new Stripe(this.config.get('STRIPE_SECRET_KEY'), {
+      apiVersion: '2026-02-25.clover',
+    });
     this.webhookSecret = this.config.get('STRIPE_WEBHOOK_SECRET');
 
     const individualPriceId = this.config.get('STRIPE_PRICE_ID_INDIVIDUAL');
