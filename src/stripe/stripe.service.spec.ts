@@ -57,6 +57,46 @@ describe('StripeService', () => {
     }
   });
 
+  describe('when STRIPE_PRICE_ID_FAMILY is unconfigured', () => {
+    let serviceWithoutFamily: StripeService;
+
+    beforeEach(async () => {
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          StripeService,
+          {
+            provide: ApiConfigService,
+            useValue: {
+              get: jest.fn((key: string) => {
+                const values: Record<string, string | undefined> = {
+                  STRIPE_SECRET_KEY: 'sk_test_fake',
+                  STRIPE_WEBHOOK_SECRET: 'whsec_test_fake',
+                  STRIPE_PRICE_ID_INDIVIDUAL: 'price_individual_test',
+                  STRIPE_PRICE_ID_FAMILY: undefined,
+                };
+                return values[key];
+              }),
+            },
+          },
+        ],
+      }).compile();
+      serviceWithoutFamily = module.get<StripeService>(StripeService);
+    });
+
+    it('does not register family in either map', () => {
+      expect(serviceWithoutFamily.getPriceIdForTier('family')).toBeUndefined();
+      expect(
+        serviceWithoutFamily.getTierForPriceId('price_family_test'),
+      ).toBeUndefined();
+    });
+
+    it('still resolves the individual tier', () => {
+      expect(serviceWithoutFamily.getPriceIdForTier('individual')).toBe(
+        'price_individual_test',
+      );
+    });
+  });
+
   describe('constructWebhookEvent', () => {
     it('delegates to Stripe SDK webhooks.constructEvent and returns the event', () => {
       const fakeEvent = {

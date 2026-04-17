@@ -78,7 +78,9 @@ export const configSchema = z.object({
   STRIPE_SECRET_KEY: z.string(),
   STRIPE_WEBHOOK_SECRET: z.string(),
   STRIPE_PRICE_ID_INDIVIDUAL: z.string(),
-  STRIPE_PRICE_ID_FAMILY: z.string(),
+  // Family tier is not yet a product offering. Set this when the product launches;
+  // until then, /subscriptions/checkout for `tier: 'family'` will return 400 Invalid tier.
+  STRIPE_PRICE_ID_FAMILY: z.string().optional(),
 
   // APP
   APP_BASE_URL: z.url().default('https://app.mylegacymade.com'),

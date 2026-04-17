@@ -21,15 +21,18 @@ export class StripeService {
     const individualPriceId = this.config.get('STRIPE_PRICE_ID_INDIVIDUAL');
     const familyPriceId = this.config.get('STRIPE_PRICE_ID_FAMILY');
 
-    this.priceToTier = new Map<string, SubscriptionTier>([
+    const priceTierEntries: [string, SubscriptionTier][] = [
       [individualPriceId, 'individual'],
-      [familyPriceId, 'family'],
-    ]);
-
-    this.tierToPrice = new Map<SubscriptionTier, string>([
+    ];
+    const tierPriceEntries: [SubscriptionTier, string][] = [
       ['individual', individualPriceId],
-      ['family', familyPriceId],
-    ]);
+    ];
+    if (familyPriceId) {
+      priceTierEntries.push([familyPriceId, 'family']);
+      tierPriceEntries.push(['family', familyPriceId]);
+    }
+    this.priceToTier = new Map(priceTierEntries);
+    this.tierToPrice = new Map(tierPriceEntries);
   }
 
   async createCustomer(
