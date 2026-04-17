@@ -120,6 +120,13 @@
       "when": 1774930706011,
       "tag": "0016_amusing_bedlam",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1776449789057,
+      "tag": "0017_add_stripe_fields",
+      "breakpoints": true
     }
   ]
 }
