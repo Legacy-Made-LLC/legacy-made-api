@@ -74,6 +74,13 @@ export const configSchema = z.object({
     .optional()
     .transform((val) => val?.split(',') ?? []),
 
+  // REVENUECAT (IAP subscriptions)
+  // Shared-secret value configured in the RevenueCat dashboard under
+  // Webhooks → Authorization header. RC includes this verbatim in the
+  // Authorization header of every webhook delivery; we compare it in
+  // constant time. Required — the webhook endpoint is otherwise open.
+  REVENUECAT_WEBHOOK_AUTH_HEADER: z.string(),
+
   // FEATURE FLAGS
   GRANT_LIFETIME_TO_NEW_USERS: z
     .stringbool({

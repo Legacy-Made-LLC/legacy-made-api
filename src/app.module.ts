@@ -28,6 +28,7 @@ import { MessagesModule } from './messages/messages.module';
 import { EncryptionModule } from './encryption/encryption.module';
 import { PushNotificationsModule } from './push-notifications/push-notifications.module';
 import { PreferencesModule } from './preferences/preferences.module';
+import { RevenuecatModule } from './revenuecat/revenuecat.module';
 
 @Module({
   imports: [
@@ -72,6 +73,7 @@ import { PreferencesModule } from './preferences/preferences.module';
     MessagesModule,
     EncryptionModule,
     PreferencesModule,
+    RevenuecatModule,
   ],
   providers: [
     {
