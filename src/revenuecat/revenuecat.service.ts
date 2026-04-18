@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
+import { ApiConfigService } from 'src/config/api-config.service';
 import { DbService } from 'src/db/db.service';
 import { EntitlementsService } from 'src/entitlements/entitlements.service';
 import type { SubscriptionTier } from 'src/entitlements/entitlements.types';
@@ -12,11 +13,19 @@ export type EventOutcome = 'handled' | 'skipped';
 @Injectable()
 export class RevenuecatService {
   private readonly logger = new Logger(RevenuecatService.name);
+  private readonly entitlementIndividual: string;
+  private readonly entitlementFamily: string;
 
   constructor(
     private readonly db: DbService,
     private readonly entitlements: EntitlementsService,
-  ) {}
+    private readonly config: ApiConfigService,
+  ) {
+    this.entitlementIndividual = this.config.get(
+      'RC_ENTITLEMENT_ID_INDIVIDUAL',
+    );
+    this.entitlementFamily = this.config.get('RC_ENTITLEMENT_ID_FAMILY');
+  }
 
   async isEventProcessed(eventId: string): Promise<boolean> {
     return this.db.bypassRls(async (tx) => {
@@ -184,17 +193,17 @@ export class RevenuecatService {
     });
   }
 
-  // MVP convention: RC entitlement IDs match our tier names. When the
-  // convention diverges (e.g. localized entitlement names, A/B-tested
-  // product lines), replace this with a config-driven map.
+  // Map RC entitlement identifiers (configured in the dashboard) to our
+  // internal tier names. Identifiers come from RC_ENTITLEMENT_ID_*
+  // env vars; defaults are 'individual' and 'family'.
   private resolveTier(
     event: RcWebhookEvent,
   ): Extract<SubscriptionTier, 'individual' | 'family'> | null {
     const ids =
       event.entitlement_ids ??
       (event.entitlement_id ? [event.entitlement_id] : []);
-    if (ids.includes('individual')) return 'individual';
-    if (ids.includes('family')) return 'family';
+    if (ids.includes(this.entitlementIndividual)) return 'individual';
+    if (ids.includes(this.entitlementFamily)) return 'family';
     return null;
   }
 }

@@ -80,6 +80,11 @@ export const configSchema = z.object({
   // Authorization header of every webhook delivery; we compare it in
   // constant time. Required — the webhook endpoint is otherwise open.
   REVENUECAT_WEBHOOK_AUTH_HEADER: z.string(),
+  // RC entitlement identifier strings, as configured in the dashboard
+  // (case-sensitive). Defaults match the convention "entitlement id ==
+  // tier name". Override if the dashboard uses different slugs.
+  RC_ENTITLEMENT_ID_INDIVIDUAL: z.string().default('individual'),
+  RC_ENTITLEMENT_ID_FAMILY: z.string().default('family'),
 
   // FEATURE FLAGS
   GRANT_LIFETIME_TO_NEW_USERS: z

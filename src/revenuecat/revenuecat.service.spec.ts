@@ -1,8 +1,20 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ApiConfigService } from 'src/config/api-config.service';
 import { DbService } from 'src/db/db.service';
 import { EntitlementsService } from 'src/entitlements/entitlements.service';
 import { RevenuecatService } from './revenuecat.service';
 import type { RcWebhookEvent } from './dto/webhook.dto';
+
+function makeConfigMock(overrides: Record<string, string> = {}): {
+  get: jest.Mock;
+} {
+  const defaults: Record<string, string> = {
+    RC_ENTITLEMENT_ID_INDIVIDUAL: 'individual',
+    RC_ENTITLEMENT_ID_FAMILY: 'family',
+  };
+  const values = { ...defaults, ...overrides };
+  return { get: jest.fn((key: string) => values[key]) };
+}
 
 function makeEvent(overrides: Partial<RcWebhookEvent> = {}): RcWebhookEvent {
   return {
@@ -56,6 +68,7 @@ describe('RevenuecatService', () => {
         RevenuecatService,
         { provide: DbService, useValue: { bypassRls } },
         { provide: EntitlementsService, useValue: { updateTier } },
+        { provide: ApiConfigService, useValue: makeConfigMock() },
       ],
     }).compile();
 
@@ -150,6 +163,41 @@ describe('RevenuecatService', () => {
         expect(updateTier).not.toHaveBeenCalled();
       },
     );
+  });
+
+  describe('configurable entitlement identifiers', () => {
+    it('honors a custom entitlement identifier from config', async () => {
+      const customUpdateTier = jest.fn().mockResolvedValue(undefined);
+      const module = await Test.createTestingModule({
+        providers: [
+          RevenuecatService,
+          { provide: DbService, useValue: { bypassRls } },
+          {
+            provide: EntitlementsService,
+            useValue: { updateTier: customUpdateTier },
+          },
+          {
+            provide: ApiConfigService,
+            useValue: makeConfigMock({
+              RC_ENTITLEMENT_ID_INDIVIDUAL: 'legacy_made_individual',
+            }),
+          },
+        ],
+      }).compile();
+      const customService = module.get<RevenuecatService>(RevenuecatService);
+
+      await customService.handleEvent(
+        makeEvent({ entitlement_ids: ['legacy_made_individual'] }),
+      );
+      expect(customUpdateTier).toHaveBeenCalledWith('user_abc', 'individual');
+
+      // The default identifier is no longer recognized.
+      customUpdateTier.mockClear();
+      await customService.handleEvent(
+        makeEvent({ entitlement_ids: ['individual'] }),
+      );
+      expect(customUpdateTier).not.toHaveBeenCalled();
+    });
   });
 
   describe('idempotency wrappers', () => {
