@@ -652,7 +652,7 @@ export class EntitlementsService {
 
   /**
    * Update a user's subscription tier.
-   * Used by webhook handlers when processing Stripe events.
+   * Used by webhook handlers when processing RevenueCat events.
    */
   async updateTier(userId: string, tier: SubscriptionTier): Promise<void> {
     await this.db.bypassRls(async (tx) => {

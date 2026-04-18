@@ -18,6 +18,7 @@ import { crudPolicy } from 'drizzle-orm/neon';
 import {
   type AnyPgColumn,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -161,7 +162,7 @@ export const users = pgTable(
  * entitlements (feature access and quotas). Created automatically when
  * a user signs up, defaulting to 'free' tier.
  *
- * Future Stripe integration will update tier via webhooks.
+ * Paid tiers are populated from RevenueCat webhooks. See src/revenuecat/.
  */
 export const subscriptions = pgTable(
   'subscriptions',
@@ -173,9 +174,24 @@ export const subscriptions = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     tier: text('tier').notNull().default('free'),
 
-    // Future Stripe fields (nullable)
-    stripeCustomerId: text('stripe_customer_id'),
-    stripeSubscriptionId: text('stripe_subscription_id'),
+    // Derived status. NULL for free users (no subscription).
+    // For paid users: 'active' (period valid), 'in_grace_period' (billing
+    // retry with grace), or 'expired' (access revoked).
+    status: text('status'),
+
+    // RevenueCat identity fields (nullable — populated from webhooks).
+    // original_transaction_id is the stable identifier across renewals;
+    // use it as the webhook-to-subscription anchor.
+    rcOriginalTransactionId: text('rc_original_transaction_id'),
+    rcProductId: text('rc_product_id'),
+    rcStore: text('rc_store'), // e.g. 'app_store', 'play_store', 'promotional'
+
+    // Set when RC fires CANCELLATION with an active subscription. Access
+    // continues until currentPeriodEnd; UI can surface "cancellation pending".
+    unsubscribeDetectedAt: timestamp('unsubscribe_detected_at', {
+      withTimezone: true,
+    }),
+
     currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
 
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -188,6 +204,13 @@ export const subscriptions = pgTable(
   },
   (table) => [
     index('subscriptions_user_id_idx').on(table.userId),
+    index('subscriptions_rc_original_transaction_id_idx').on(
+      table.rcOriginalTransactionId,
+    ),
+    check(
+      'subscriptions_status_check',
+      sql`${table.status} IS NULL OR ${table.status} IN ('active', 'in_grace_period', 'expired')`,
+    ),
     shouldBypassRlsPolicy(),
     isCurrentUserPolicy(table.userId),
   ],
@@ -1107,6 +1130,30 @@ export const notificationLog = pgTable(
   ],
 ).enableRLS();
 
+/**
+ * Processed RevenueCat events - webhook replay dedupe log
+ *
+ * Append-only. One row per RevenueCat webhook event we've processed,
+ * keyed by the event's `id` field. The webhook controller checks this
+ * before dispatching to handlers so duplicate deliveries (RC retries up
+ * to 5 times over ~2.5h) are no-ops. Only accessed via bypassRls.
+ */
+export const processedRevenuecatEvents = pgTable(
+  'processed_revenuecat_events',
+  {
+    eventId: text('event_id').primaryKey(), // RevenueCat event id
+    eventType: text('event_type').notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    outcome: text('outcome').notNull(), // 'handled' | 'skipped'
+  },
+  (table) => [
+    index('processed_revenuecat_events_received_at_idx').on(table.receivedAt),
+    shouldBypassRlsPolicy(),
+  ],
+).enableRLS();
+
 // =============================================================================
 // TYPE EXPORTS
 // =============================================================================
@@ -1161,3 +1208,8 @@ export type NewUserPreference = typeof userPreferences.$inferInsert;
 
 export type NotificationLogEntry = typeof notificationLog.$inferSelect;
 export type NewNotificationLogEntry = typeof notificationLog.$inferInsert;
+
+export type ProcessedRevenuecatEvent =
+  typeof processedRevenuecatEvents.$inferSelect;
+export type NewProcessedRevenuecatEvent =
+  typeof processedRevenuecatEvents.$inferInsert;
