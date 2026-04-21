@@ -62,7 +62,10 @@ export class RevenuecatController {
 
     let outcome: EventOutcome;
     try {
-      outcome = await this.rc.handleEvent(event);
+      // Dispatch + dedupe insert commit atomically — a mid-flight failure
+      // rolls back both, so RC's retry replays the full event instead of
+      // skipping it because of an orphaned dedupe row.
+      outcome = await this.rc.processEvent(event);
     } catch (err) {
       this.logger.error(
         {
@@ -77,8 +80,6 @@ export class RevenuecatController {
       );
       throw err;
     }
-
-    await this.rc.recordProcessedEvent(event.id, event.type, outcome);
 
     const logPayload = {
       msg: 'revenuecat_webhook',

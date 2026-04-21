@@ -26,20 +26,18 @@ function makeDto(
 describe('RevenuecatController', () => {
   let controller: RevenuecatController;
   let isEventProcessed: jest.Mock;
-  let recordProcessedEvent: jest.Mock;
-  let handleEvent: jest.Mock;
+  let processEvent: jest.Mock;
 
   beforeEach(async () => {
     isEventProcessed = jest.fn().mockResolvedValue(false);
-    recordProcessedEvent = jest.fn().mockResolvedValue(undefined);
-    handleEvent = jest.fn().mockResolvedValue('handled');
+    processEvent = jest.fn().mockResolvedValue('handled');
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [RevenuecatController],
       providers: [
         {
           provide: RevenuecatService,
-          useValue: { isEventProcessed, recordProcessedEvent, handleEvent },
+          useValue: { isEventProcessed, processEvent },
         },
         {
           provide: ApiConfigService,
@@ -64,21 +62,21 @@ describe('RevenuecatController', () => {
       await expect(
         controller.handleWebhook(undefined, makeDto()),
       ).rejects.toBeInstanceOf(UnauthorizedException);
-      expect(handleEvent).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
     });
 
     it('rejects requests with a mismatched Authorization header', async () => {
       await expect(
         controller.handleWebhook('wrong-value', makeDto()),
       ).rejects.toBeInstanceOf(UnauthorizedException);
-      expect(handleEvent).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
     });
 
     it('accepts requests with the configured Authorization header', async () => {
       await expect(controller.handleWebhook(AUTH, makeDto())).resolves.toEqual({
         received: true,
       });
-      expect(handleEvent).toHaveBeenCalled();
+      expect(processEvent).toHaveBeenCalled();
     });
   });
 
@@ -87,37 +85,31 @@ describe('RevenuecatController', () => {
       isEventProcessed.mockResolvedValueOnce(true);
       const result = await controller.handleWebhook(AUTH, makeDto());
       expect(result).toEqual({ received: true, deduped: true });
-      expect(handleEvent).not.toHaveBeenCalled();
-      expect(recordProcessedEvent).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
     });
 
-    it('records outcome after successful dispatch', async () => {
-      await controller.handleWebhook(AUTH, makeDto());
-      expect(recordProcessedEvent).toHaveBeenCalledWith(
-        'evt_1',
-        'INITIAL_PURCHASE',
-        'handled',
+    it('dispatches the event and returns received', async () => {
+      const result = await controller.handleWebhook(AUTH, makeDto());
+      expect(result).toEqual({ received: true });
+      expect(processEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'evt_1', type: 'INITIAL_PURCHASE' }),
       );
     });
 
-    it('records skipped outcome for event types the service ignores', async () => {
-      handleEvent.mockResolvedValueOnce('skipped');
-      await controller.handleWebhook(AUTH, makeDto({ type: 'TEST' }));
-      expect(recordProcessedEvent).toHaveBeenCalledWith(
-        'evt_1',
-        'TEST',
-        'skipped',
-      );
+    it('accepts skipped outcome for event types the service ignores', async () => {
+      processEvent.mockResolvedValueOnce('skipped');
+      await expect(
+        controller.handleWebhook(AUTH, makeDto({ type: 'TEST' })),
+      ).resolves.toEqual({ received: true });
     });
   });
 
   describe('error handling', () => {
-    it('propagates handler errors and does NOT record processing', async () => {
-      handleEvent.mockRejectedValueOnce(new Error('downstream failure'));
+    it('propagates handler errors (the tx rolls back dedupe insert)', async () => {
+      processEvent.mockRejectedValueOnce(new Error('downstream failure'));
       await expect(controller.handleWebhook(AUTH, makeDto())).rejects.toThrow(
         'downstream failure',
       );
-      expect(recordProcessedEvent).not.toHaveBeenCalled();
     });
   });
 
