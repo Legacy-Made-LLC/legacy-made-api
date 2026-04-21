@@ -53,6 +53,7 @@ describe('RevenuecatService', () => {
         'onConflictDoNothing',
         'update',
         'set',
+        'returning',
       ];
       for (const m of methods) {
         chain[m] = () => chain;

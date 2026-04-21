@@ -101,6 +101,24 @@ export class RevenuecatService {
     );
   }
 
+  // RC's app_user_id may not match a user row when webhooks land before the
+  // client calls Purchases.logIn (anonymous $RCAnonymousID:* IDs) or when a
+  // lifetime user's row is filtered out by notLifetime. Emit a warn so those
+  // orphans are visible instead of silent no-ops.
+  private logIfUnmatched(
+    result: { userId: string }[],
+    event: RcWebhookEvent,
+  ): void {
+    if (result.length === 0) {
+      this.logger.warn({
+        msg: 'revenuecat_unmatched_user',
+        eventId: event.id,
+        eventType: event.type,
+        appUserId: event.app_user_id,
+      });
+    }
+  }
+
   private async applyActive(event: RcWebhookEvent): Promise<void> {
     const tier = this.resolveTier(event);
     if (!tier) {
@@ -125,18 +143,20 @@ export class RevenuecatService {
     // The user cancelled; access continues until expiration_at_ms. Record
     // the unsubscribe timestamp so UI can surface "cancellation pending"
     // without changing tier/status.
-    await this.db.bypassRls(async (tx) => {
-      await tx
+    const result = await this.db.bypassRls(async (tx) =>
+      tx
         .update(subscriptions)
         .set({ unsubscribeDetectedAt: new Date() })
-        .where(this.notLifetime(event.app_user_id));
-    });
+        .where(this.notLifetime(event.app_user_id))
+        .returning({ userId: subscriptions.userId }),
+    );
+    this.logIfUnmatched(result, event);
   }
 
   private async applyExpiration(event: RcWebhookEvent): Promise<void> {
     await this.entitlements.updateTier(event.app_user_id, 'free');
-    await this.db.bypassRls(async (tx) => {
-      await tx
+    const result = await this.db.bypassRls(async (tx) =>
+      tx
         .update(subscriptions)
         .set({
           status: 'expired',
@@ -146,13 +166,15 @@ export class RevenuecatService {
           unsubscribeDetectedAt: null,
           currentPeriodEnd: null,
         })
-        .where(this.notLifetime(event.app_user_id));
-    });
+        .where(this.notLifetime(event.app_user_id))
+        .returning({ userId: subscriptions.userId }),
+    );
+    this.logIfUnmatched(result, event);
   }
 
   private async applyBillingIssue(event: RcWebhookEvent): Promise<void> {
-    await this.db.bypassRls(async (tx) => {
-      await tx
+    const result = await this.db.bypassRls(async (tx) =>
+      tx
         .update(subscriptions)
         .set({
           status: 'in_grace_period',
@@ -160,24 +182,36 @@ export class RevenuecatService {
             ? new Date(event.grace_period_expiration_at_ms)
             : null,
         })
-        .where(this.notLifetime(event.app_user_id));
-    });
+        .where(this.notLifetime(event.app_user_id))
+        .returning({ userId: subscriptions.userId }),
+    );
+    this.logIfUnmatched(result, event);
   }
 
   private async applyProductChange(event: RcWebhookEvent): Promise<void> {
     const tier = this.resolveTier(event);
-    if (!tier) return;
+    if (!tier) {
+      this.logger.warn({
+        msg: 'revenuecat_unmapped_entitlement',
+        eventId: event.id,
+        appUserId: event.app_user_id,
+        entitlementIds: event.entitlement_ids,
+      });
+      return;
+    }
 
     await this.entitlements.updateTier(event.app_user_id, tier);
-    await this.db.bypassRls(async (tx) => {
-      await tx
+    const result = await this.db.bypassRls(async (tx) =>
+      tx
         .update(subscriptions)
         .set({
           tier,
           rcProductId: event.new_product_id ?? event.product_id ?? null,
         })
-        .where(this.notLifetime(event.app_user_id));
-    });
+        .where(this.notLifetime(event.app_user_id))
+        .returning({ userId: subscriptions.userId }),
+    );
+    this.logIfUnmatched(result, event);
   }
 
   private async writeSubscription(
@@ -188,8 +222,8 @@ export class RevenuecatService {
       unsubscribeDetectedAt: Date | null;
     },
   ): Promise<void> {
-    await this.db.bypassRls(async (tx) => {
-      await tx
+    const result = await this.db.bypassRls(async (tx) =>
+      tx
         .update(subscriptions)
         .set({
           status: fields.status,
@@ -202,8 +236,10 @@ export class RevenuecatService {
             : null,
           unsubscribeDetectedAt: fields.unsubscribeDetectedAt,
         })
-        .where(this.notLifetime(event.app_user_id));
-    });
+        .where(this.notLifetime(event.app_user_id))
+        .returning({ userId: subscriptions.userId }),
+    );
+    this.logIfUnmatched(result, event);
   }
 
   // Map RC entitlement identifiers (configured in the dashboard) to our

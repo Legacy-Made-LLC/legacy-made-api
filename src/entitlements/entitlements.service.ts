@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { and, count, eq, ne, sum } from 'drizzle-orm';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiClsService } from '../lib/api-cls.service';
@@ -30,6 +30,8 @@ import {
 
 @Injectable()
 export class EntitlementsService {
+  private readonly logger = new Logger(EntitlementsService.name);
+
   constructor(
     private readonly db: DbService,
     private readonly cls: ApiClsService,
@@ -659,8 +661,8 @@ export class EntitlementsService {
    * downgrade a lifetime user to free.
    */
   async updateTier(userId: string, tier: SubscriptionTier): Promise<void> {
-    await this.db.bypassRls(async (tx) => {
-      await tx
+    const result = await this.db.bypassRls(async (tx) =>
+      tx
         .update(subscriptions)
         .set({ tier })
         .where(
@@ -668,8 +670,19 @@ export class EntitlementsService {
             eq(subscriptions.userId, userId),
             ne(subscriptions.tier, 'lifetime'),
           ),
-        );
-    });
+        )
+        .returning({ userId: subscriptions.userId }),
+    );
+    if (result.length === 0) {
+      // Either no subscription row for this user (unusual — rows are
+      // created on sign-up) or the row is lifetime (intentionally
+      // protected). Surface so anonymous RC IDs don't silently orphan.
+      this.logger.warn({
+        msg: 'entitlements_update_tier_no_match',
+        userId,
+        attemptedTier: tier,
+      });
+    }
   }
 
   /**

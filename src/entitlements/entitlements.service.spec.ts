@@ -575,13 +575,17 @@ describe('EntitlementsService', () => {
     it('should update user tier using bypassRls', async () => {
       const mockUpdate = jest.fn().mockReturnThis();
       const mockSet = jest.fn().mockReturnThis();
-      const mockWhere = jest.fn().mockResolvedValue([]);
+      const mockWhere = jest.fn().mockReturnThis();
+      const mockReturning = jest
+        .fn()
+        .mockResolvedValue([{ userId: 'user-123' }]);
 
       mockDbService.bypassRls.mockImplementation((callback) =>
         callback({
           update: mockUpdate,
           set: mockSet,
           where: mockWhere,
+          returning: mockReturning,
         }),
       );
 
