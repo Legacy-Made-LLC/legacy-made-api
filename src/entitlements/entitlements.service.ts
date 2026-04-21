@@ -624,7 +624,8 @@ export class EntitlementsService {
         .where(eq(subscriptions.userId, userId));
 
       let tier: SubscriptionTier = 'free';
-      const status = (subscription?.status ?? null) as SubscriptionStatus | null;
+      const status = (subscription?.status ??
+        null) as SubscriptionStatus | null;
       if (subscription) {
         const rawTier = subscription.tier as SubscriptionTier;
         tier = this.isSubscriptionExpired(

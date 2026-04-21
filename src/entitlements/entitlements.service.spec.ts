@@ -680,9 +680,9 @@ describe('EntitlementsService', () => {
       });
 
       it('lifetime tier ignores status (never expires)', () => {
-        expect(
-          service.isSubscriptionExpired('lifetime', null, 'expired'),
-        ).toBe(false);
+        expect(service.isSubscriptionExpired('lifetime', null, 'expired')).toBe(
+          false,
+        );
       });
     });
   });
