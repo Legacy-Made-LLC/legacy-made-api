@@ -510,7 +510,9 @@ describe('EncryptionService', () => {
       mockDbService.rls
         .mockImplementationOnce(async (cb) => {
           const tx = {
-            select: jest.fn().mockReturnValue(mockSelectChain([{ id: 'plan-123' }])),
+            select: jest
+              .fn()
+              .mockReturnValue(mockSelectChain([{ id: 'plan-123' }])),
           };
           return cb(tx);
         })
@@ -662,7 +664,9 @@ describe('EncryptionService', () => {
       mockDbService.rls.mockImplementation(async (cb) => {
         const tx = {
           // Only plan ownership check (no contact check for own device DEK)
-          select: jest.fn().mockReturnValue(mockSelectChain([{ id: 'plan-1' }])),
+          select: jest
+            .fn()
+            .mockReturnValue(mockSelectChain([{ id: 'plan-1' }])),
           insert: jest.fn().mockReturnValue({
             values: jest.fn().mockReturnValue({
               onConflictDoUpdate: jest.fn().mockReturnValue({
