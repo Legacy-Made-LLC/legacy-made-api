@@ -575,13 +575,17 @@ describe('EntitlementsService', () => {
     it('should update user tier using bypassRls', async () => {
       const mockUpdate = jest.fn().mockReturnThis();
       const mockSet = jest.fn().mockReturnThis();
-      const mockWhere = jest.fn().mockResolvedValue([]);
+      const mockWhere = jest.fn().mockReturnThis();
+      const mockReturning = jest
+        .fn()
+        .mockResolvedValue([{ userId: 'user-123' }]);
 
       mockDbService.bypassRls.mockImplementation((callback) =>
         callback({
           update: mockUpdate,
           set: mockSet,
           where: mockWhere,
+          returning: mockReturning,
         }),
       );
 
@@ -639,6 +643,47 @@ describe('EntitlementsService', () => {
       expect(service.isSubscriptionExpired('individual', futureDate)).toBe(
         false,
       );
+    });
+
+    describe('status-aware behavior', () => {
+      it('returns true immediately for status=expired, even with a future period end', () => {
+        const future = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+        expect(
+          service.isSubscriptionExpired('individual', future, 'expired'),
+        ).toBe(true);
+      });
+
+      it('returns false for status=in_grace_period while within currentPeriodEnd', () => {
+        // RC sets currentPeriodEnd to the grace-period expiration; within it,
+        // the user still has access with no extra buffer.
+        const graceEnd = new Date(Date.now() + 1000 * 60 * 60); // 1h from now
+        expect(
+          service.isSubscriptionExpired(
+            'individual',
+            graceEnd,
+            'in_grace_period',
+          ),
+        ).toBe(false);
+      });
+
+      it('returns true for status=in_grace_period once past currentPeriodEnd (no extra 24h)', () => {
+        // A minute past grace end — our old 24h buffer would have said "still
+        // active"; the status-aware path says expired.
+        const graceEnd = new Date(Date.now() - 1000 * 60);
+        expect(
+          service.isSubscriptionExpired(
+            'individual',
+            graceEnd,
+            'in_grace_period',
+          ),
+        ).toBe(true);
+      });
+
+      it('lifetime tier ignores status (never expires)', () => {
+        expect(service.isSubscriptionExpired('lifetime', null, 'expired')).toBe(
+          false,
+        );
+      });
     });
   });
 

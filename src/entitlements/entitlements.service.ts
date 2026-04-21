@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
-import { count, eq, sum } from 'drizzle-orm';
+import { Injectable, Logger } from '@nestjs/common';
+import { and, count, eq, ne, sum } from 'drizzle-orm';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import {
@@ -25,11 +25,14 @@ import {
   EntitlementResult,
   Pillar,
   QuotaFeature,
+  SubscriptionStatus,
   SubscriptionTier,
 } from './entitlements.types';
 
 @Injectable()
 export class EntitlementsService {
+  private readonly logger = new Logger(EntitlementsService.name);
+
   constructor(
     private readonly db: DbService,
     private readonly cls: ApiClsService,
@@ -192,6 +195,7 @@ export class EntitlementsService {
         .select({
           tier: subscriptions.tier,
           currentPeriodEnd: subscriptions.currentPeriodEnd,
+          status: subscriptions.status,
         })
         .from(subscriptions)
         .where(eq(subscriptions.userId, userId));
@@ -201,8 +205,11 @@ export class EntitlementsService {
       }
 
       const tier = subscription.tier as SubscriptionTier;
+      const status = subscription.status as SubscriptionStatus | null;
 
-      if (this.isSubscriptionExpired(tier, subscription.currentPeriodEnd)) {
+      if (
+        this.isSubscriptionExpired(tier, subscription.currentPeriodEnd, status)
+      ) {
         return 'free';
       }
 
@@ -211,25 +218,30 @@ export class EntitlementsService {
   }
 
   /**
-   * Check if a subscription has expired based on tier and currentPeriodEnd.
-   * Non-expiring tiers (free, lifetime) always return false.
-   * Paid tiers are expired if currentPeriodEnd + grace period < now.
+   * Check if a subscription has expired.
+   *
+   * - Non-expiring tiers (free, lifetime) never expire.
+   * - Explicit `status === 'expired'` from the webhook wins immediately,
+   *   even if currentPeriodEnd is somehow in the future.
+   * - `status === 'in_grace_period'` honors currentPeriodEnd as-is — RC
+   *   already negotiated the provider-side grace (typically 16 days on
+   *   App Store); we don't stack our own on top.
+   * - Otherwise (status null or 'active') we add a small buffer to absorb
+   *   webhook lag and client/server clock skew.
    */
   isSubscriptionExpired(
     tier: SubscriptionTier,
     currentPeriodEnd: Date | null,
+    status: SubscriptionStatus | null = null,
   ): boolean {
-    // Non-expiring tiers never expire
-    if (NON_EXPIRING_TIERS.includes(tier)) {
-      return false;
+    if (NON_EXPIRING_TIERS.includes(tier)) return false;
+    if (status === 'expired') return true;
+    if (!currentPeriodEnd) return false;
+
+    if (status === 'in_grace_period') {
+      return Date.now() > currentPeriodEnd.getTime();
     }
 
-    // Paid tiers without an end date are not expired (shouldn't happen normally)
-    if (!currentPeriodEnd) {
-      return false;
-    }
-
-    // Check if we're past the grace period
     const expirationWithGrace =
       currentPeriodEnd.getTime() + SUBSCRIPTION_GRACE_PERIOD_MS;
     return Date.now() > expirationWithGrace;
@@ -463,6 +475,7 @@ export class EntitlementsService {
         .select({
           tier: subscriptions.tier,
           currentPeriodEnd: subscriptions.currentPeriodEnd,
+          status: subscriptions.status,
         })
         .from(subscriptions)
         .where(eq(subscriptions.userId, userId));
@@ -473,6 +486,7 @@ export class EntitlementsService {
         tier = this.isSubscriptionExpired(
           rawTier,
           subscription.currentPeriodEnd,
+          subscription.status as SubscriptionStatus | null,
         )
           ? 'free'
           : rawTier;
@@ -603,16 +617,21 @@ export class EntitlementsService {
         .select({
           tier: subscriptions.tier,
           currentPeriodEnd: subscriptions.currentPeriodEnd,
+          status: subscriptions.status,
+          unsubscribeDetectedAt: subscriptions.unsubscribeDetectedAt,
         })
         .from(subscriptions)
         .where(eq(subscriptions.userId, userId));
 
       let tier: SubscriptionTier = 'free';
+      const status = (subscription?.status ??
+        null) as SubscriptionStatus | null;
       if (subscription) {
         const rawTier = subscription.tier as SubscriptionTier;
         tier = this.isSubscriptionExpired(
           rawTier,
           subscription.currentPeriodEnd,
+          status,
         )
           ? 'free'
           : rawTier;
@@ -641,6 +660,12 @@ export class EntitlementsService {
         pillars: config.pillars,
         viewOnlyPillars: config.viewOnlyPillars,
         quotas,
+        subscription: {
+          status,
+          currentPeriodEnd:
+            subscription?.currentPeriodEnd?.toISOString() ?? null,
+          cancellationPending: subscription?.unsubscribeDetectedAt != null,
+        },
       };
     };
 
@@ -652,15 +677,35 @@ export class EntitlementsService {
 
   /**
    * Update a user's subscription tier.
-   * Used by webhook handlers when processing Stripe events.
+   * Used by webhook handlers when processing RevenueCat events.
+   *
+   * Lifetime is manually granted and never touched by the webhook pipeline —
+   * the WHERE clause excludes it atomically so a stray RC event can't
+   * downgrade a lifetime user to free.
    */
   async updateTier(userId: string, tier: SubscriptionTier): Promise<void> {
-    await this.db.bypassRls(async (tx) => {
-      await tx
+    const result = await this.db.bypassRls(async (tx) =>
+      tx
         .update(subscriptions)
         .set({ tier })
-        .where(eq(subscriptions.userId, userId));
-    });
+        .where(
+          and(
+            eq(subscriptions.userId, userId),
+            ne(subscriptions.tier, 'lifetime'),
+          ),
+        )
+        .returning({ userId: subscriptions.userId }),
+    );
+    if (result.length === 0) {
+      // Either no subscription row for this user (unusual — rows are
+      // created on sign-up) or the row is lifetime (intentionally
+      // protected). Surface so anonymous RC IDs don't silently orphan.
+      this.logger.warn({
+        msg: 'entitlements_update_tier_no_match',
+        userId,
+        attemptedTier: tier,
+      });
+    }
   }
 
   /**

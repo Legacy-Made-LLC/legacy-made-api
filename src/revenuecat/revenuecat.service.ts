@@ -1,0 +1,275 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { and, eq, ne } from 'drizzle-orm';
+import { ApiConfigService } from 'src/config/api-config.service';
+import { DbService, type DrizzleTransaction } from 'src/db/db.service';
+import type { SubscriptionTier } from 'src/entitlements/entitlements.types';
+import { processedRevenuecatEvents, subscriptions } from 'src/schema';
+import type { RcWebhookEvent } from './dto/webhook.dto';
+
+type SubscriptionStatus = 'active' | 'in_grace_period' | 'expired';
+export type EventOutcome = 'handled' | 'skipped';
+
+@Injectable()
+export class RevenuecatService {
+  private readonly logger = new Logger(RevenuecatService.name);
+  private readonly entitlementIndividual: string;
+  private readonly entitlementFamily: string;
+
+  constructor(
+    private readonly db: DbService,
+    private readonly config: ApiConfigService,
+  ) {
+    this.entitlementIndividual = this.config.get(
+      'RC_ENTITLEMENT_ID_INDIVIDUAL',
+    );
+    this.entitlementFamily = this.config.get('RC_ENTITLEMENT_ID_FAMILY');
+  }
+
+  async isEventProcessed(eventId: string): Promise<boolean> {
+    return this.db.bypassRls(async (tx) => {
+      const [row] = await tx
+        .select({ eventId: processedRevenuecatEvents.eventId })
+        .from(processedRevenuecatEvents)
+        .where(eq(processedRevenuecatEvents.eventId, eventId));
+      return row !== undefined;
+    });
+  }
+
+  /**
+   * Apply an RC webhook event and record its processing in a single
+   * transaction. Either both the subscription mutation and the dedupe
+   * row commit, or neither does — so a retry after a partial failure
+   * replays the whole event cleanly instead of being swallowed by the
+   * dedupe table.
+   *
+   * Idempotent by design: SET statements use deterministic values from
+   * the event payload, and the dedupe insert uses ON CONFLICT DO NOTHING.
+   */
+  async processEvent(event: RcWebhookEvent): Promise<EventOutcome> {
+    return this.db.bypassRls(async (tx) => {
+      const outcome = await this.dispatch(tx, event);
+      await tx
+        .insert(processedRevenuecatEvents)
+        .values({
+          eventId: event.id,
+          eventType: event.type,
+          outcome,
+        })
+        .onConflictDoNothing({ target: processedRevenuecatEvents.eventId });
+      return outcome;
+    });
+  }
+
+  private async dispatch(
+    tx: DrizzleTransaction,
+    event: RcWebhookEvent,
+  ): Promise<EventOutcome> {
+    switch (event.type) {
+      case 'INITIAL_PURCHASE':
+      case 'RENEWAL':
+      case 'UNCANCELLATION':
+        await this.applyActive(tx, event);
+        return 'handled';
+
+      case 'CANCELLATION':
+        await this.applyCancellation(tx, event);
+        return 'handled';
+
+      case 'EXPIRATION':
+        await this.applyExpiration(tx, event);
+        return 'handled';
+
+      case 'BILLING_ISSUE':
+        await this.applyBillingIssue(tx, event);
+        return 'handled';
+
+      case 'PRODUCT_CHANGE':
+        await this.applyProductChange(tx, event);
+        return 'handled';
+
+      case 'SUBSCRIPTION_PAUSED':
+        // Play Store only. Treat as expired until we introduce a dedicated
+        // 'paused' state; user can resume from the Play Store.
+        await this.applyExpiration(tx, event);
+        return 'handled';
+
+      case 'NON_RENEWING_PURCHASE':
+      case 'SUBSCRIBER_ALIAS':
+      case 'TRANSFER':
+      case 'TEST':
+      default:
+        // Unknown types land here too; the controller logs 'skipped' at
+        // warn level so new RC event types are visible without 5xx'ing.
+        return 'skipped';
+    }
+  }
+
+  // Lifetime is manually granted and must never be downgraded or mutated by
+  // RC webhooks. Every subscription-mutation query narrows by tier != 'lifetime'
+  // so a stray RC event for a lifetime user can't alter their access.
+  private notLifetime(userId: string) {
+    return and(
+      eq(subscriptions.userId, userId),
+      ne(subscriptions.tier, 'lifetime'),
+    );
+  }
+
+  // RC's app_user_id may not match a user row when webhooks land before the
+  // client calls Purchases.logIn (anonymous $RCAnonymousID:* IDs) or when a
+  // lifetime user's row is filtered out by notLifetime. Emit a warn so those
+  // orphans are visible instead of silent no-ops.
+  private logIfUnmatched(
+    result: { userId: string }[],
+    event: RcWebhookEvent,
+  ): void {
+    if (result.length === 0) {
+      this.logger.warn({
+        msg: 'revenuecat_unmatched_user',
+        eventId: event.id,
+        eventType: event.type,
+        appUserId: event.app_user_id,
+      });
+    }
+  }
+
+  private async applyActive(
+    tx: DrizzleTransaction,
+    event: RcWebhookEvent,
+  ): Promise<void> {
+    const tier = this.resolveTier(event);
+    if (!tier) {
+      this.logger.warn({
+        msg: 'revenuecat_unmapped_entitlement',
+        eventId: event.id,
+        appUserId: event.app_user_id,
+        entitlementIds: event.entitlement_ids,
+      });
+      return;
+    }
+
+    await this.writeSubscription(tx, event, {
+      status: 'active',
+      tier,
+      unsubscribeDetectedAt: null,
+    });
+  }
+
+  private async applyCancellation(
+    tx: DrizzleTransaction,
+    event: RcWebhookEvent,
+  ): Promise<void> {
+    // The user cancelled; access continues until expiration_at_ms. Record
+    // the unsubscribe timestamp so UI can surface "cancellation pending"
+    // without changing tier/status.
+    const result = await tx
+      .update(subscriptions)
+      .set({ unsubscribeDetectedAt: new Date() })
+      .where(this.notLifetime(event.app_user_id))
+      .returning({ userId: subscriptions.userId });
+    this.logIfUnmatched(result, event);
+  }
+
+  private async applyExpiration(
+    tx: DrizzleTransaction,
+    event: RcWebhookEvent,
+  ): Promise<void> {
+    const result = await tx
+      .update(subscriptions)
+      .set({
+        tier: 'free',
+        status: 'expired',
+        rcOriginalTransactionId: null,
+        rcProductId: null,
+        rcStore: null,
+        unsubscribeDetectedAt: null,
+        currentPeriodEnd: null,
+      })
+      .where(this.notLifetime(event.app_user_id))
+      .returning({ userId: subscriptions.userId });
+    this.logIfUnmatched(result, event);
+  }
+
+  private async applyBillingIssue(
+    tx: DrizzleTransaction,
+    event: RcWebhookEvent,
+  ): Promise<void> {
+    const result = await tx
+      .update(subscriptions)
+      .set({
+        status: 'in_grace_period',
+        currentPeriodEnd: event.grace_period_expiration_at_ms
+          ? new Date(event.grace_period_expiration_at_ms)
+          : null,
+      })
+      .where(this.notLifetime(event.app_user_id))
+      .returning({ userId: subscriptions.userId });
+    this.logIfUnmatched(result, event);
+  }
+
+  private async applyProductChange(
+    tx: DrizzleTransaction,
+    event: RcWebhookEvent,
+  ): Promise<void> {
+    const tier = this.resolveTier(event);
+    if (!tier) {
+      this.logger.warn({
+        msg: 'revenuecat_unmapped_entitlement',
+        eventId: event.id,
+        appUserId: event.app_user_id,
+        entitlementIds: event.entitlement_ids,
+      });
+      return;
+    }
+
+    const result = await tx
+      .update(subscriptions)
+      .set({
+        tier,
+        rcProductId: event.new_product_id ?? event.product_id ?? null,
+      })
+      .where(this.notLifetime(event.app_user_id))
+      .returning({ userId: subscriptions.userId });
+    this.logIfUnmatched(result, event);
+  }
+
+  private async writeSubscription(
+    tx: DrizzleTransaction,
+    event: RcWebhookEvent,
+    fields: {
+      status: SubscriptionStatus;
+      tier: SubscriptionTier;
+      unsubscribeDetectedAt: Date | null;
+    },
+  ): Promise<void> {
+    const result = await tx
+      .update(subscriptions)
+      .set({
+        status: fields.status,
+        tier: fields.tier,
+        rcOriginalTransactionId: event.original_transaction_id ?? null,
+        rcProductId: event.product_id ?? null,
+        rcStore: event.store ?? null,
+        currentPeriodEnd: event.expiration_at_ms
+          ? new Date(event.expiration_at_ms)
+          : null,
+        unsubscribeDetectedAt: fields.unsubscribeDetectedAt,
+      })
+      .where(this.notLifetime(event.app_user_id))
+      .returning({ userId: subscriptions.userId });
+    this.logIfUnmatched(result, event);
+  }
+
+  // Map RC entitlement identifiers (configured in the dashboard) to our
+  // internal tier names. Identifiers come from RC_ENTITLEMENT_ID_*
+  // env vars; defaults are 'individual' and 'family'.
+  private resolveTier(
+    event: RcWebhookEvent,
+  ): Extract<SubscriptionTier, 'individual' | 'family'> | null {
+    const ids =
+      event.entitlement_ids ??
+      (event.entitlement_id ? [event.entitlement_id] : []);
+    if (ids.includes(this.entitlementIndividual)) return 'individual';
+    if (ids.includes(this.entitlementFamily)) return 'family';
+    return null;
+  }
+}

@@ -1,5 +1,12 @@
 export type SubscriptionTier = 'free' | 'individual' | 'family' | 'lifetime';
 
+/**
+ * Webhook-derived lifecycle state for a paid subscription. NULL for users
+ * who have never had a paid subscription (free tier by default). Mirrors
+ * the CHECK constraint on subscriptions.status.
+ */
+export type SubscriptionStatus = 'active' | 'in_grace_period' | 'expired';
+
 export type Pillar =
   | 'important_info' // Entries
   | 'wishes' // Wishes & Guidance
@@ -50,4 +57,20 @@ export interface EntitlementInfo {
     current: number;
     unlimited: boolean;
   }[];
+  /**
+   * Lifecycle metadata derived from the RC webhook pipeline. Optional so
+   * older clients that ignore it continue to work. `null` status + `null`
+   * currentPeriodEnd is the default for free/never-paid users.
+   */
+  subscription: {
+    status: SubscriptionStatus | null;
+    /** ISO date string; null when no paid period is in force. */
+    currentPeriodEnd: string | null;
+    /**
+     * True when the user has cancelled but retains access through
+     * currentPeriodEnd. UI can surface "cancels on X" without changing
+     * tier/access.
+     */
+    cancellationPending: boolean;
+  };
 }
