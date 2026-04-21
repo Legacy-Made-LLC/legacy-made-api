@@ -166,7 +166,10 @@ describe('PreferencesService', () => {
           {
             ...existingRow,
             notifications: {
-              reminders: { ...existingRow.notifications.reminders, enabled: true },
+              reminders: {
+                ...existingRow.notifications.reminders,
+                enabled: true,
+              },
             },
           },
         ]),
