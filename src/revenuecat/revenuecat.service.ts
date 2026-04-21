@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { ApiConfigService } from 'src/config/api-config.service';
 import { DbService } from 'src/db/db.service';
 import { EntitlementsService } from 'src/entitlements/entitlements.service';
@@ -84,8 +84,21 @@ export class RevenuecatService {
       case 'SUBSCRIBER_ALIAS':
       case 'TRANSFER':
       case 'TEST':
+      default:
+        // Unknown types land here too; the controller logs 'skipped' at
+        // warn level so new RC event types are visible without 5xx'ing.
         return 'skipped';
     }
+  }
+
+  // Lifetime is manually granted and must never be downgraded or mutated by
+  // RC webhooks. Every subscription-mutation query narrows by tier != 'lifetime'
+  // so a stray RC event for a lifetime user can't alter their access.
+  private notLifetime(userId: string) {
+    return and(
+      eq(subscriptions.userId, userId),
+      ne(subscriptions.tier, 'lifetime'),
+    );
   }
 
   private async applyActive(event: RcWebhookEvent): Promise<void> {
@@ -116,7 +129,7 @@ export class RevenuecatService {
       await tx
         .update(subscriptions)
         .set({ unsubscribeDetectedAt: new Date() })
-        .where(eq(subscriptions.userId, event.app_user_id));
+        .where(this.notLifetime(event.app_user_id));
     });
   }
 
@@ -133,7 +146,7 @@ export class RevenuecatService {
           unsubscribeDetectedAt: null,
           currentPeriodEnd: null,
         })
-        .where(eq(subscriptions.userId, event.app_user_id));
+        .where(this.notLifetime(event.app_user_id));
     });
   }
 
@@ -147,7 +160,7 @@ export class RevenuecatService {
             ? new Date(event.grace_period_expiration_at_ms)
             : null,
         })
-        .where(eq(subscriptions.userId, event.app_user_id));
+        .where(this.notLifetime(event.app_user_id));
     });
   }
 
@@ -163,7 +176,7 @@ export class RevenuecatService {
           tier,
           rcProductId: event.new_product_id ?? event.product_id ?? null,
         })
-        .where(eq(subscriptions.userId, event.app_user_id));
+        .where(this.notLifetime(event.app_user_id));
     });
   }
 
@@ -189,7 +202,7 @@ export class RevenuecatService {
             : null,
           unsubscribeDetectedAt: fields.unsubscribeDetectedAt,
         })
-        .where(eq(subscriptions.userId, event.app_user_id));
+        .where(this.notLifetime(event.app_user_id));
     });
   }
 

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { count, eq, sum } from 'drizzle-orm';
+import { and, count, eq, ne, sum } from 'drizzle-orm';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import {
@@ -653,13 +653,22 @@ export class EntitlementsService {
   /**
    * Update a user's subscription tier.
    * Used by webhook handlers when processing RevenueCat events.
+   *
+   * Lifetime is manually granted and never touched by the webhook pipeline —
+   * the WHERE clause excludes it atomically so a stray RC event can't
+   * downgrade a lifetime user to free.
    */
   async updateTier(userId: string, tier: SubscriptionTier): Promise<void> {
     await this.db.bypassRls(async (tx) => {
       await tx
         .update(subscriptions)
         .set({ tier })
-        .where(eq(subscriptions.userId, userId));
+        .where(
+          and(
+            eq(subscriptions.userId, userId),
+            ne(subscriptions.tier, 'lifetime'),
+          ),
+        );
     });
   }
 

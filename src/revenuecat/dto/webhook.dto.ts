@@ -1,11 +1,11 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
-// RevenueCat event types we observe. Event types RC introduces after this
-// list is written fall through the controller's default branch and land as
-// 'skipped' in the dedupe log.
+// RevenueCat event types we observe. The schema accepts any string so
+// future RC-added types don't 400 — they fall through the handler's
+// default branch and land as 'skipped' in the dedupe log.
 // See https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields
-export const rcEventTypeSchema = z.enum([
+export const KNOWN_RC_EVENT_TYPES = [
   'INITIAL_PURCHASE',
   'RENEWAL',
   'CANCELLATION',
@@ -18,12 +18,12 @@ export const rcEventTypeSchema = z.enum([
   'SUBSCRIBER_ALIAS',
   'TRANSFER',
   'TEST',
-]);
+] as const;
 
-export type RcEventType = z.infer<typeof rcEventTypeSchema>;
+export type RcEventType = (typeof KNOWN_RC_EVENT_TYPES)[number];
 
 export const rcWebhookEventSchema = z.object({
-  type: rcEventTypeSchema,
+  type: z.string(),
   id: z.string(),
   app_user_id: z.string(),
   original_app_user_id: z.string().optional(),
