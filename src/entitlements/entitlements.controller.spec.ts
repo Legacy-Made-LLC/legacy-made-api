@@ -22,6 +22,11 @@ describe('EntitlementsController', () => {
         unlimited: false,
       },
     ],
+    subscription: {
+      status: null,
+      currentPeriodEnd: null,
+      cancellationPending: false,
+    },
   };
 
   beforeEach(async () => {
