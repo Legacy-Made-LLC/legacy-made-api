@@ -10,6 +10,8 @@ function makeConfigMock(overrides: Record<string, string> = {}): {
   const defaults: Record<string, string> = {
     RC_ENTITLEMENT_ID_INDIVIDUAL: 'individual',
     RC_ENTITLEMENT_ID_FAMILY: 'family',
+    REVENUECAT_REST_API_KEY: 'sk_test_rest_key',
+    REVENUECAT_API_BASE_URL: 'https://api.revenuecat.test/v1',
   };
   const values = { ...defaults, ...overrides };
   return { get: jest.fn((key: string) => values[key]) };
@@ -35,7 +37,12 @@ function makeEvent(overrides: Partial<RcWebhookEvent> = {}): RcWebhookEvent {
  * `.returning()` resolves to [{ userId }] by default so the unmatched-user
  * warn log doesn't fire; override via `returningResult` when testing that path.
  */
-function makeTxMock(opts: { returningResult?: unknown[] } = {}) {
+function makeTxMock(
+  opts: {
+    returningResult?: unknown[];
+    selectResult?: unknown[];
+  } = {},
+) {
   const setCalls: Record<string, unknown>[] = [];
   const insertValues: Record<string, unknown>[] = [];
   const returning = jest
@@ -58,8 +65,9 @@ function makeTxMock(opts: { returningResult?: unknown[] } = {}) {
   chain.select = () => chain;
   chain.from = () => chain;
   // Make the chain itself thenable so `await tx.select().from().where()`
-  // (the shape used by isEventProcessed) resolves to [].
-  const terminal = Promise.resolve([] as unknown[]);
+  // resolves. Default: empty result (used by isEventProcessed); reconcile
+  // tests pass `selectResult` to simulate an existing subscription row.
+  const terminal = Promise.resolve(opts.selectResult ?? ([] as unknown[]));
   (chain as { then: typeof terminal.then }).then = terminal.then.bind(terminal);
   return { chain, setCalls, insertValues, returning };
 }
@@ -267,6 +275,191 @@ describe('RevenuecatService', () => {
     it('isEventProcessed calls bypassRls', async () => {
       await service.isEventProcessed('evt_1');
       expect(bypassRls).toHaveBeenCalled();
+    });
+  });
+
+  describe('reconcileFromRc', () => {
+    function buildSubscriberPayload(opts: {
+      tierEntitlement?: 'individual' | 'family';
+      expired?: boolean;
+      productId?: string;
+      store?: string | null;
+      unsubscribeDetectedAt?: string | null;
+      billingIssue?: boolean;
+    }) {
+      const productId = opts.productId ?? 'product_a';
+      const expires = opts.expired
+        ? new Date(Date.now() - 60_000).toISOString()
+        : new Date(Date.now() + 60_000).toISOString();
+      const entitlements: Record<string, unknown> = {};
+      if (opts.tierEntitlement) {
+        entitlements[opts.tierEntitlement] = {
+          expires_date: expires,
+          product_identifier: productId,
+        };
+      }
+      const subscriptionsBlob: Record<string, unknown> = {};
+      subscriptionsBlob[productId] = {
+        expires_date: expires,
+        store: opts.store ?? 'app_store',
+        unsubscribe_detected_at: opts.unsubscribeDetectedAt ?? null,
+        billing_issues_detected_at: opts.billingIssue
+          ? new Date().toISOString()
+          : null,
+      };
+      return {
+        subscriber: {
+          original_app_user_id: 'user_abc',
+          entitlements,
+          subscriptions: subscriptionsBlob,
+        },
+      };
+    }
+
+    function mockFetchOnce(payload: unknown, status = 200): jest.Mock {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => payload,
+        text: async () => JSON.stringify(payload),
+      });
+      (globalThis as { fetch: unknown }).fetch = fetchMock;
+      return fetchMock;
+    }
+
+    afterEach(() => {
+      delete (globalThis as { fetch?: unknown }).fetch;
+    });
+
+    it('writes individual tier when RC reports an active individual entitlement', async () => {
+      mockFetchOnce(buildSubscriberPayload({ tierEntitlement: 'individual' }));
+
+      const result = await service.reconcileFromRc('user_abc');
+
+      expect(tx.setCalls[0]).toEqual(
+        expect.objectContaining({
+          tier: 'individual',
+          status: 'active',
+          rcProductId: 'product_a',
+          rcStore: 'app_store',
+          unsubscribeDetectedAt: null,
+        }),
+      );
+      expect(result.tier).toBe('individual');
+      expect(result.status).toBe('active');
+      expect(result.cancellationPending).toBe(false);
+    });
+
+    it('writes family tier when only family entitlement is active', async () => {
+      mockFetchOnce(buildSubscriberPayload({ tierEntitlement: 'family' }));
+      const result = await service.reconcileFromRc('user_abc');
+      expect(tx.setCalls[0]).toEqual(
+        expect.objectContaining({ tier: 'family' }),
+      );
+      expect(result.tier).toBe('family');
+    });
+
+    it('reverts to free/expired when RC has no active entitlements', async () => {
+      mockFetchOnce(buildSubscriberPayload({}));
+      const result = await service.reconcileFromRc('user_abc');
+      expect(tx.setCalls[0]).toEqual(
+        expect.objectContaining({
+          tier: 'free',
+          status: 'expired',
+          rcProductId: null,
+          currentPeriodEnd: null,
+        }),
+      );
+      expect(result.tier).toBe('free');
+    });
+
+    it('treats an expired entitlement (date in the past) as no entitlement', async () => {
+      mockFetchOnce(
+        buildSubscriberPayload({
+          tierEntitlement: 'individual',
+          expired: true,
+        }),
+      );
+      const result = await service.reconcileFromRc('user_abc');
+      expect(result.tier).toBe('free');
+    });
+
+    it('records cancellationPending when RC reports unsubscribe_detected_at', async () => {
+      mockFetchOnce(
+        buildSubscriberPayload({
+          tierEntitlement: 'individual',
+          unsubscribeDetectedAt: new Date().toISOString(),
+        }),
+      );
+      const result = await service.reconcileFromRc('user_abc');
+      expect(result.cancellationPending).toBe(true);
+      expect(tx.setCalls[0]).toEqual(
+        expect.objectContaining({ tier: 'individual' }),
+      );
+    });
+
+    it('reports in_grace_period when billing_issues_detected_at is set', async () => {
+      mockFetchOnce(
+        buildSubscriberPayload({
+          tierEntitlement: 'individual',
+          billingIssue: true,
+        }),
+      );
+      const result = await service.reconcileFromRc('user_abc');
+      expect(result.status).toBe('in_grace_period');
+    });
+
+    it('leaves lifetime users untouched and reports their existing state', async () => {
+      mockFetchOnce(buildSubscriberPayload({ tierEntitlement: 'individual' }));
+      const lifetimeTx = makeTxMock({
+        selectResult: [
+          {
+            tier: 'lifetime',
+            status: 'active',
+            currentPeriodEnd: null,
+            unsubscribeDetectedAt: null,
+          },
+        ],
+      });
+      const lifetimeBypass = jest.fn(async (fn: (t: unknown) => unknown) =>
+        fn(lifetimeTx.chain),
+      );
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          RevenuecatService,
+          { provide: DbService, useValue: { bypassRls: lifetimeBypass } },
+          { provide: ApiConfigService, useValue: makeConfigMock() },
+        ],
+      }).compile();
+      const lifetimeService = module.get<RevenuecatService>(RevenuecatService);
+
+      const result = await lifetimeService.reconcileFromRc('user_abc');
+
+      expect(result.tier).toBe('lifetime');
+      // No update calls were issued for the lifetime row.
+      expect(lifetimeTx.setCalls).toEqual([]);
+    });
+
+    it('throws when the RC REST call fails', async () => {
+      mockFetchOnce({ message: 'forbidden' }, 403);
+      await expect(service.reconcileFromRc('user_abc')).rejects.toThrow(
+        /RevenueCat REST 403/,
+      );
+    });
+
+    it('uses the configured base URL and bearer token', async () => {
+      const fetchMock = mockFetchOnce(
+        buildSubscriberPayload({ tierEntitlement: 'individual' }),
+      );
+      await service.reconcileFromRc('user_abc');
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://api.revenuecat.test/v1/subscribers/user_abc',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer sk_test_rest_key',
+          }),
+        }),
+      );
     });
   });
 });

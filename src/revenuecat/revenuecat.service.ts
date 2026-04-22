@@ -9,11 +9,41 @@ import type { RcWebhookEvent } from './dto/webhook.dto';
 type SubscriptionStatus = 'active' | 'in_grace_period' | 'expired';
 export type EventOutcome = 'handled' | 'skipped';
 
+export interface ReconcileResult {
+  tier: SubscriptionTier;
+  status: SubscriptionStatus | null;
+  currentPeriodEnd: Date | null;
+  cancellationPending: boolean;
+}
+
+interface RcSubscriberSubscription {
+  expires_date: string | null;
+  store?: string | null;
+  unsubscribe_detected_at?: string | null;
+  billing_issues_detected_at?: string | null;
+  original_purchase_date?: string | null;
+}
+
+interface RcSubscriberEntitlement {
+  expires_date: string | null;
+  product_identifier?: string;
+}
+
+interface RcSubscriberPayload {
+  subscriber: {
+    original_app_user_id: string;
+    entitlements: Record<string, RcSubscriberEntitlement>;
+    subscriptions?: Record<string, RcSubscriberSubscription>;
+  };
+}
+
 @Injectable()
 export class RevenuecatService {
   private readonly logger = new Logger(RevenuecatService.name);
   private readonly entitlementIndividual: string;
   private readonly entitlementFamily: string;
+  private readonly restApiKey: string;
+  private readonly restBaseUrl: string;
 
   constructor(
     private readonly db: DbService,
@@ -23,6 +53,8 @@ export class RevenuecatService {
       'RC_ENTITLEMENT_ID_INDIVIDUAL',
     );
     this.entitlementFamily = this.config.get('RC_ENTITLEMENT_ID_FAMILY');
+    this.restApiKey = this.config.get('REVENUECAT_REST_API_KEY');
+    this.restBaseUrl = this.config.get('REVENUECAT_API_BASE_URL');
   }
 
   async isEventProcessed(eventId: string): Promise<boolean> {
@@ -271,5 +303,157 @@ export class RevenuecatService {
     if (ids.includes(this.entitlementIndividual)) return 'individual';
     if (ids.includes(this.entitlementFamily)) return 'family';
     return null;
+  }
+
+  /**
+   * Force-sync the user's subscription row against RC's REST API view of
+   * the subscriber. Used for self-healing reconciliation when our DB has
+   * diverged from RC — e.g. a webhook delivery that never landed, or
+   * (in dev) a manual DB edit. Webhooks remain the primary path; this
+   * is the safety net the FE can call from Restore Purchases or the
+   * activating screen's "force refresh" path.
+   *
+   * No-ops for lifetime users — their tier is granted manually and must
+   * never be downgraded by an RC view that doesn't know about it.
+   */
+  async reconcileFromRc(userId: string): Promise<ReconcileResult> {
+    const payload = await this.fetchSubscriber(userId);
+    const desired = this.deriveDesiredState(payload);
+
+    return this.db.bypassRls(async (tx) => {
+      const [existing] = await tx
+        .select({
+          tier: subscriptions.tier,
+          status: subscriptions.status,
+          currentPeriodEnd: subscriptions.currentPeriodEnd,
+          unsubscribeDetectedAt: subscriptions.unsubscribeDetectedAt,
+        })
+        .from(subscriptions)
+        .where(eq(subscriptions.userId, userId));
+
+      // Lifetime users: don't touch the row, just report current state.
+      if (existing?.tier === 'lifetime') {
+        return {
+          tier: 'lifetime',
+          status: existing.status as SubscriptionStatus | null,
+          currentPeriodEnd: existing.currentPeriodEnd,
+          cancellationPending: existing.unsubscribeDetectedAt !== null,
+        };
+      }
+
+      const result = await tx
+        .update(subscriptions)
+        .set({
+          tier: desired.tier,
+          status: desired.status,
+          rcOriginalTransactionId: desired.rcOriginalTransactionId,
+          rcProductId: desired.rcProductId,
+          rcStore: desired.rcStore,
+          currentPeriodEnd: desired.currentPeriodEnd,
+          unsubscribeDetectedAt: desired.unsubscribeDetectedAt,
+        })
+        .where(this.notLifetime(userId))
+        .returning({ userId: subscriptions.userId });
+
+      if (result.length === 0) {
+        // No row exists for this user. The user-bootstrap flow (sign-up)
+        // is responsible for creating the free-tier row; we don't insert
+        // here so reconcile stays a pure "align with RC" operation.
+        this.logger.warn({
+          msg: 'revenuecat_reconcile_no_row',
+          userId,
+        });
+      }
+
+      return {
+        tier: desired.tier,
+        status: desired.status,
+        currentPeriodEnd: desired.currentPeriodEnd,
+        cancellationPending: desired.unsubscribeDetectedAt !== null,
+      };
+    });
+  }
+
+  private async fetchSubscriber(userId: string): Promise<RcSubscriberPayload> {
+    const url = `${this.restBaseUrl}/subscribers/${encodeURIComponent(userId)}`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${this.restApiKey}`,
+        Accept: 'application/json',
+      },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(
+        `RevenueCat REST ${res.status} for subscriber ${userId}: ${body.slice(0, 200)}`,
+      );
+    }
+    return (await res.json()) as RcSubscriberPayload;
+  }
+
+  // Translate the RC subscriber payload into the row state we'd write.
+  // Mirrors the webhook handlers' logic: an active entitlement maps to
+  // the corresponding tier; otherwise we revert to free/expired.
+  private deriveDesiredState(payload: RcSubscriberPayload): {
+    tier: SubscriptionTier;
+    status: SubscriptionStatus | null;
+    rcOriginalTransactionId: string | null;
+    rcProductId: string | null;
+    rcStore: string | null;
+    currentPeriodEnd: Date | null;
+    unsubscribeDetectedAt: Date | null;
+  } {
+    const now = Date.now();
+    const subscriber = payload.subscriber;
+    const ents = subscriber.entitlements ?? {};
+
+    const isActive = (e: RcSubscriberEntitlement | undefined) =>
+      !!e &&
+      (e.expires_date === null ||
+        (e.expires_date !== undefined &&
+          new Date(e.expires_date).getTime() > now));
+
+    let tier: Extract<SubscriptionTier, 'individual' | 'family'> | null = null;
+    let entitlement: RcSubscriberEntitlement | undefined;
+    if (isActive(ents[this.entitlementIndividual])) {
+      tier = 'individual';
+      entitlement = ents[this.entitlementIndividual];
+    } else if (isActive(ents[this.entitlementFamily])) {
+      tier = 'family';
+      entitlement = ents[this.entitlementFamily];
+    }
+
+    if (!tier || !entitlement) {
+      return {
+        tier: 'free',
+        status: 'expired',
+        rcOriginalTransactionId: null,
+        rcProductId: null,
+        rcStore: null,
+        currentPeriodEnd: null,
+        unsubscribeDetectedAt: null,
+      };
+    }
+
+    const productId = entitlement.product_identifier ?? null;
+    const sub = productId ? subscriber.subscriptions?.[productId] : undefined;
+
+    const status: SubscriptionStatus = sub?.billing_issues_detected_at
+      ? 'in_grace_period'
+      : 'active';
+
+    return {
+      tier,
+      status,
+      rcOriginalTransactionId: null, // not surfaced on the subscriber endpoint
+      rcProductId: productId,
+      rcStore: sub?.store ?? null,
+      currentPeriodEnd: entitlement.expires_date
+        ? new Date(entitlement.expires_date)
+        : null,
+      unsubscribeDetectedAt: sub?.unsubscribe_detected_at
+        ? new Date(sub.unsubscribe_detected_at)
+        : null,
+    };
   }
 }
