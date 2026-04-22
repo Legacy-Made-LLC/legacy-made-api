@@ -154,6 +154,35 @@ describe('RevenuecatService', () => {
       );
     });
 
+    it('EXPIRATION explicitly skips lifetime users and logs a warn', async () => {
+      const lifetimeTx = makeTxMock({ selectResult: [{ tier: 'lifetime' }] });
+      const lifetimeBypassRls = jest.fn(async (fn: (t: unknown) => unknown) =>
+        fn(lifetimeTx.chain),
+      );
+      const module = await Test.createTestingModule({
+        providers: [
+          RevenuecatService,
+          { provide: DbService, useValue: { bypassRls: lifetimeBypassRls } },
+          { provide: ApiConfigService, useValue: makeConfigMock() },
+        ],
+      }).compile();
+      const lifetimeService = module.get<RevenuecatService>(RevenuecatService);
+      const warnSpy = jest
+        .spyOn(lifetimeService['logger'], 'warn')
+        .mockImplementation(() => {});
+
+      await lifetimeService.processEvent(makeEvent({ type: 'EXPIRATION' }));
+
+      // No UPDATE — only the dedupe insert's values call should record.
+      expect(lifetimeTx.setCalls).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          msg: 'revenuecat_expiration_skipped_lifetime',
+        }),
+      );
+      warnSpy.mockRestore();
+    });
+
     it('SUBSCRIPTION_PAUSED is treated as expiration', async () => {
       await service.processEvent(makeEvent({ type: 'SUBSCRIPTION_PAUSED' }));
       expect(tx.setCalls[0]).toEqual(
@@ -208,7 +237,7 @@ describe('RevenuecatService', () => {
       expect(tx.setCalls[0]).not.toHaveProperty('tier');
     });
 
-    it.each(['TEST', 'SUBSCRIBER_ALIAS', 'TRANSFER', 'NON_RENEWING_PURCHASE'])(
+    it.each(['TEST', 'NON_RENEWING_PURCHASE'])(
       '%s returns skipped without touching subscriptions',
       async (type) => {
         const outcome = await service.processEvent(
@@ -218,6 +247,55 @@ describe('RevenuecatService', () => {
         expect(tx.setCalls).toEqual([]);
       },
     );
+
+    it('REFUND_REVERSED re-applies active state', async () => {
+      const outcome = await service.processEvent(
+        makeEvent({ type: 'REFUND_REVERSED' }),
+      );
+      expect(outcome).toBe('handled');
+      expect(tx.setCalls[0]).toEqual(
+        expect.objectContaining({ tier: 'individual', status: 'active' }),
+      );
+    });
+
+    it.each(['SUBSCRIBER_ALIAS', 'TRANSFER'])(
+      '%s returns handled, does not mutate in the tx, and triggers a post-tx reconcile',
+      async (type) => {
+        const reconcileSpy = jest
+          .spyOn(service, 'reconcileFromRc')
+          .mockResolvedValue({
+            tier: 'individual',
+            status: 'active',
+            currentPeriodEnd: null,
+            cancellationPending: false,
+          });
+
+        const outcome = await service.processEvent(
+          makeEvent({ type: type as RcWebhookEvent['type'] }),
+        );
+
+        expect(outcome).toBe('handled');
+        // The inline tx must not mutate subscriptions — the reconcile is
+        // what fixes any divergence.
+        expect(tx.setCalls).toEqual([]);
+        expect(reconcileSpy).toHaveBeenCalledWith('user_abc');
+
+        reconcileSpy.mockRestore();
+      },
+    );
+
+    it('swallows reconcile failures for SUBSCRIBER_ALIAS so dedupe still commits', async () => {
+      const reconcileSpy = jest
+        .spyOn(service, 'reconcileFromRc')
+        .mockRejectedValue(new Error('RC upstream 502'));
+
+      const outcome = await service.processEvent(
+        makeEvent({ type: 'SUBSCRIBER_ALIAS' }),
+      );
+
+      expect(outcome).toBe('handled');
+      reconcileSpy.mockRestore();
+    });
 
     it('records the event in the same transaction as the dispatch', async () => {
       await service.processEvent(makeEvent());

@@ -17,6 +17,7 @@ export const KNOWN_RC_EVENT_TYPES = [
   'NON_RENEWING_PURCHASE',
   'SUBSCRIBER_ALIAS',
   'TRANSFER',
+  'REFUND_REVERSED',
   'TEST',
 ] as const;
 
