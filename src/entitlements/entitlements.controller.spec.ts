@@ -1,4 +1,6 @@
+import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { ApiClsService } from 'src/lib/api-cls.service';
 import { RevenuecatService } from 'src/revenuecat/revenuecat.service';
 import { EntitlementsController } from './entitlements.controller';
@@ -35,6 +37,12 @@ describe('EntitlementsController', () => {
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
+      imports: [
+        ThrottlerModule.forRoot([
+          { name: 'short', ttl: 10_000, limit: 3 },
+          { name: 'medium', ttl: 60_000, limit: 10 },
+        ]),
+      ],
       controllers: [EntitlementsController],
       providers: [
         {
@@ -60,6 +68,7 @@ describe('EntitlementsController', () => {
           provide: ApiClsService,
           useValue: {
             requireUserId: jest.fn().mockReturnValue('user_test'),
+            get: jest.fn().mockReturnValue(undefined),
           },
         },
       ],
@@ -102,6 +111,18 @@ describe('EntitlementsController', () => {
       );
 
       await expect(controller.syncEntitlements()).rejects.toThrow('RC down');
+      expect(entitlementsService.getEntitlementInfo).not.toHaveBeenCalled();
+    });
+
+    it('rejects with BadRequest when called in trusted-contact context', async () => {
+      cls.get.mockImplementation((key) =>
+        key === 'planOwnerId' ? 'plan_owner_xyz' : undefined,
+      );
+
+      await expect(controller.syncEntitlements()).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(revenuecatService.reconcileFromRc).not.toHaveBeenCalled();
       expect(entitlementsService.getEntitlementInfo).not.toHaveBeenCalled();
     });
   });

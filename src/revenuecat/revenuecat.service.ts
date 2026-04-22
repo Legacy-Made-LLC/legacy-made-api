@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadGatewayException, Injectable, Logger } from '@nestjs/common';
 import { and, eq, ne } from 'drizzle-orm';
 import { ApiConfigService } from 'src/config/api-config.service';
 import { DbService, type DrizzleTransaction } from 'src/db/db.service';
@@ -315,6 +315,12 @@ export class RevenuecatService {
    *
    * No-ops for lifetime users — their tier is granted manually and must
    * never be downgraded by an RC view that doesn't know about it.
+   *
+   * Field semantics: only fields RC's subscriber endpoint actually
+   * authoritatively reports for this user are written. We never null out
+   * a webhook-set value (notably `rcOriginalTransactionId`, which the
+   * subscriber endpoint omits) — those fields are left untouched so the
+   * webhook-anchored row identity survives a reconcile.
    */
   async reconcileFromRc(userId: string): Promise<ReconcileResult> {
     const payload = await this.fetchSubscriber(userId);
@@ -332,6 +338,9 @@ export class RevenuecatService {
         .where(eq(subscriptions.userId, userId));
 
       // Lifetime users: don't touch the row, just report current state.
+      // The notLifetime() guard on the UPDATE below covers a row flipping
+      // to lifetime mid-transaction; this short-circuit avoids an unneeded
+      // write attempt for the common case.
       if (existing?.tier === 'lifetime') {
         return {
           tier: 'lifetime',
@@ -341,17 +350,27 @@ export class RevenuecatService {
         };
       }
 
+      // Build the SET payload by including only fields the RC payload
+      // gave us authoritative values for. Drizzle-set-with-undefined
+      // would still write a column, so we strip undefined first.
+      const setPayload: Record<string, unknown> = {
+        tier: desired.tier,
+        status: desired.status,
+        currentPeriodEnd: desired.currentPeriodEnd,
+      };
+      if (desired.rcProductId !== undefined) {
+        setPayload.rcProductId = desired.rcProductId;
+      }
+      if (desired.rcStore !== undefined) {
+        setPayload.rcStore = desired.rcStore;
+      }
+      if (desired.unsubscribeDetectedAt !== undefined) {
+        setPayload.unsubscribeDetectedAt = desired.unsubscribeDetectedAt;
+      }
+
       const result = await tx
         .update(subscriptions)
-        .set({
-          tier: desired.tier,
-          status: desired.status,
-          rcOriginalTransactionId: desired.rcOriginalTransactionId,
-          rcProductId: desired.rcProductId,
-          rcStore: desired.rcStore,
-          currentPeriodEnd: desired.currentPeriodEnd,
-          unsubscribeDetectedAt: desired.unsubscribeDetectedAt,
-        })
+        .set(setPayload)
         .where(this.notLifetime(userId))
         .returning({ userId: subscriptions.userId });
 
@@ -362,6 +381,7 @@ export class RevenuecatService {
         this.logger.warn({
           msg: 'revenuecat_reconcile_no_row',
           userId,
+          desiredTier: desired.tier,
         });
       }
 
@@ -369,23 +389,48 @@ export class RevenuecatService {
         tier: desired.tier,
         status: desired.status,
         currentPeriodEnd: desired.currentPeriodEnd,
-        cancellationPending: desired.unsubscribeDetectedAt !== null,
+        // Report the existing flag if RC didn't give us a fresh value,
+        // so callers don't observe a transient "cancellation cleared".
+        cancellationPending:
+          desired.unsubscribeDetectedAt !== undefined
+            ? desired.unsubscribeDetectedAt !== null
+            : existing?.unsubscribeDetectedAt !== null &&
+              existing?.unsubscribeDetectedAt !== undefined,
       };
     });
   }
 
   private async fetchSubscriber(userId: string): Promise<RcSubscriberPayload> {
     const url = `${this.restBaseUrl}/subscribers/${encodeURIComponent(userId)}`;
-    const res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${this.restApiKey}`,
-        Accept: 'application/json',
-      },
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${this.restApiKey}`,
+          Accept: 'application/json',
+        },
+      });
+    } catch (err) {
+      // Network failure (DNS, TCP). Treat as a transient upstream issue.
+      throw new BadGatewayException(
+        `RevenueCat REST request failed: ${
+          err instanceof Error ? err.message : 'unknown'
+        }`,
+      );
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(
-        `RevenueCat REST ${res.status} for subscriber ${userId}: ${body.slice(0, 200)}`,
+      // RC's GET /v1/subscribers/{id} auto-creates the customer if
+      // unknown, so non-2xx here means upstream config (bad key) or RC
+      // outage — not "user doesn't exist". Map to 502 so the FE can
+      // distinguish from a real 4xx on /entitlements/sync itself.
+      this.logger.error({
+        msg: 'revenuecat_reconcile_upstream_failure',
+        status: res.status,
+        body: body.slice(0, 200),
+      });
+      throw new BadGatewayException(
+        `RevenueCat REST ${res.status}: ${body.slice(0, 120)}`,
       );
     }
     return (await res.json()) as RcSubscriberPayload;
@@ -394,19 +439,26 @@ export class RevenuecatService {
   // Translate the RC subscriber payload into the row state we'd write.
   // Mirrors the webhook handlers' logic: an active entitlement maps to
   // the corresponding tier; otherwise we revert to free/expired.
+  //
+  // A field returned as `undefined` means "RC didn't give us a value
+  // here — preserve the existing row value." A field returned as `null`
+  // means "RC explicitly told us this is empty — write the null."
   private deriveDesiredState(payload: RcSubscriberPayload): {
     tier: SubscriptionTier;
     status: SubscriptionStatus | null;
-    rcOriginalTransactionId: string | null;
-    rcProductId: string | null;
-    rcStore: string | null;
+    rcProductId: string | null | undefined;
+    rcStore: string | null | undefined;
     currentPeriodEnd: Date | null;
-    unsubscribeDetectedAt: Date | null;
+    unsubscribeDetectedAt: Date | null | undefined;
   } {
     const now = Date.now();
     const subscriber = payload.subscriber;
     const ents = subscriber.entitlements ?? {};
 
+    // RC convention: a non-subscription entitlement (e.g. a lifetime
+    // grant via promo) reports `expires_date === null`. We don't issue
+    // those for paid tiers, so treat null as "no expiration recorded"
+    // and accept it as active — same as the SDK's CustomerInfo logic.
     const isActive = (e: RcSubscriberEntitlement | undefined) =>
       !!e &&
       (e.expires_date === null ||
@@ -424,10 +476,12 @@ export class RevenuecatService {
     }
 
     if (!tier || !entitlement) {
+      // No active entitlement: align with the EXPIRATION webhook handler.
+      // Explicit nulls so any leftover store/product/cancellation flags
+      // from a prior period are cleared.
       return {
         tier: 'free',
         status: 'expired',
-        rcOriginalTransactionId: null,
         rcProductId: null,
         rcStore: null,
         currentPeriodEnd: null,
@@ -442,18 +496,28 @@ export class RevenuecatService {
       ? 'in_grace_period'
       : 'active';
 
+    // If we found a matching subscription block, RC's view of this
+    // product is authoritative — write its store/cancellation fields,
+    // including explicit null when RC reports it. If the entitlement
+    // came from a promo/grant with no subscription block, leave those
+    // fields untouched (undefined) so a webhook-set value survives.
     return {
       tier,
       status,
-      rcOriginalTransactionId: null, // not surfaced on the subscriber endpoint
       rcProductId: productId,
-      rcStore: sub?.store ?? null,
+      // `undefined` (preserve existing) when RC didn't return a
+      // subscription block for this product — common for promotional
+      // grants; otherwise RC's value (including explicit null).
+      rcStore: sub === undefined ? undefined : (sub.store ?? null),
       currentPeriodEnd: entitlement.expires_date
         ? new Date(entitlement.expires_date)
         : null,
-      unsubscribeDetectedAt: sub?.unsubscribe_detected_at
-        ? new Date(sub.unsubscribe_detected_at)
-        : null,
+      unsubscribeDetectedAt:
+        sub === undefined
+          ? undefined
+          : sub.unsubscribe_detected_at
+            ? new Date(sub.unsubscribe_detected_at)
+            : null,
     };
   }
 }

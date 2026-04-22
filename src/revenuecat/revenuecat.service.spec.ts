@@ -286,6 +286,7 @@ describe('RevenuecatService', () => {
       store?: string | null;
       unsubscribeDetectedAt?: string | null;
       billingIssue?: boolean;
+      omitSubscriptionsBlock?: boolean;
     }) {
       const productId = opts.productId ?? 'product_a';
       const expires = opts.expired
@@ -298,37 +299,44 @@ describe('RevenuecatService', () => {
           product_identifier: productId,
         };
       }
-      const subscriptionsBlob: Record<string, unknown> = {};
-      subscriptionsBlob[productId] = {
-        expires_date: expires,
-        store: opts.store ?? 'app_store',
-        unsubscribe_detected_at: opts.unsubscribeDetectedAt ?? null,
-        billing_issues_detected_at: opts.billingIssue
-          ? new Date().toISOString()
-          : null,
+      const subscriber: Record<string, unknown> = {
+        original_app_user_id: 'user_abc',
+        entitlements,
       };
-      return {
-        subscriber: {
-          original_app_user_id: 'user_abc',
-          entitlements,
-          subscriptions: subscriptionsBlob,
-        },
-      };
+      if (!opts.omitSubscriptionsBlock) {
+        const subscriptionsBlob: Record<string, unknown> = {};
+        subscriptionsBlob[productId] = {
+          expires_date: expires,
+          store: opts.store ?? 'app_store',
+          unsubscribe_detected_at: opts.unsubscribeDetectedAt ?? null,
+          billing_issues_detected_at: opts.billingIssue
+            ? new Date().toISOString()
+            : null,
+        };
+        subscriber.subscriptions = subscriptionsBlob;
+      }
+      return { subscriber };
     }
 
-    function mockFetchOnce(payload: unknown, status = 200): jest.Mock {
-      const fetchMock = jest.fn().mockResolvedValue({
+    let fetchSpy: jest.SpyInstance;
+
+    function mockFetchOnce(payload: unknown, status = 200): jest.SpyInstance {
+      fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
         ok: status >= 200 && status < 300,
         status,
         json: async () => payload,
         text: async () => JSON.stringify(payload),
-      });
-      (globalThis as { fetch: unknown }).fetch = fetchMock;
-      return fetchMock;
+      } as unknown as Response);
+      return fetchSpy;
+    }
+
+    function mockFetchRejectOnce(err: Error): jest.SpyInstance {
+      fetchSpy = jest.spyOn(globalThis, 'fetch').mockRejectedValue(err);
+      return fetchSpy;
     }
 
     afterEach(() => {
-      delete (globalThis as { fetch?: unknown }).fetch;
+      fetchSpy?.mockRestore();
     });
 
     it('writes individual tier when RC reports an active individual entitlement', async () => {
@@ -345,8 +353,35 @@ describe('RevenuecatService', () => {
           unsubscribeDetectedAt: null,
         }),
       );
+      // The subscriber endpoint doesn't return original_transaction_id;
+      // we must NOT clobber the webhook-set value.
+      expect(tx.setCalls[0]).not.toHaveProperty('rcOriginalTransactionId');
       expect(result.tier).toBe('individual');
       expect(result.status).toBe('active');
+      expect(result.cancellationPending).toBe(false);
+    });
+
+    it('omits store/cancellation fields when RC has no subscriptions block for the product (e.g. promo grant)', async () => {
+      mockFetchOnce(
+        buildSubscriberPayload({
+          tierEntitlement: 'individual',
+          omitSubscriptionsBlock: true,
+        }),
+      );
+      const result = await service.reconcileFromRc('user_abc');
+
+      expect(tx.setCalls[0]).toEqual(
+        expect.objectContaining({
+          tier: 'individual',
+          status: 'active',
+          rcProductId: 'product_a',
+        }),
+      );
+      // No subscriptions block → preserve whatever the row already has.
+      expect(tx.setCalls[0]).not.toHaveProperty('rcStore');
+      expect(tx.setCalls[0]).not.toHaveProperty('unsubscribeDetectedAt');
+      expect(tx.setCalls[0]).not.toHaveProperty('rcOriginalTransactionId');
+      // cancellationPending should reflect the existing row (none in default mock).
       expect(result.cancellationPending).toBe(false);
     });
 
@@ -440,11 +475,55 @@ describe('RevenuecatService', () => {
       expect(lifetimeTx.setCalls).toEqual([]);
     });
 
-    it('throws when the RC REST call fails', async () => {
+    it('throws BadGatewayException on a non-2xx RC response (treated as upstream)', async () => {
       mockFetchOnce({ message: 'forbidden' }, 403);
-      await expect(service.reconcileFromRc('user_abc')).rejects.toThrow(
-        /RevenueCat REST 403/,
+      await expect(service.reconcileFromRc('user_abc')).rejects.toMatchObject({
+        status: 502,
+      });
+    });
+
+    it('throws BadGatewayException on a network failure', async () => {
+      mockFetchRejectOnce(new Error('ECONNRESET'));
+      await expect(service.reconcileFromRc('user_abc')).rejects.toMatchObject({
+        status: 502,
+      });
+    });
+
+    it('warns when no subscription row exists for the user yet', async () => {
+      const warnSpy = jest
+        .spyOn(service['logger'], 'warn')
+        .mockImplementation(() => {});
+      mockFetchOnce(buildSubscriberPayload({ tierEntitlement: 'individual' }));
+      // No-row scenario: returning() returns []. Tx mock starts a fresh
+      // module so we can override returningResult without disturbing the
+      // shared `tx` used by other tests.
+      const noRowTx = makeTxMock({ returningResult: [] });
+      const noRowBypass = jest.fn(async (fn: (t: unknown) => unknown) =>
+        fn(noRowTx.chain),
       );
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          RevenuecatService,
+          { provide: DbService, useValue: { bypassRls: noRowBypass } },
+          { provide: ApiConfigService, useValue: makeConfigMock() },
+        ],
+      }).compile();
+      const noRowService = module.get<RevenuecatService>(RevenuecatService);
+      const noRowWarn = jest
+        .spyOn(noRowService['logger'], 'warn')
+        .mockImplementation(() => {});
+
+      await noRowService.reconcileFromRc('user_abc');
+
+      expect(noRowWarn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          msg: 'revenuecat_reconcile_no_row',
+          userId: 'user_abc',
+          desiredTier: 'individual',
+        }),
+      );
+      warnSpy.mockRestore();
+      noRowWarn.mockRestore();
     });
 
     it('uses the configured base URL and bearer token', async () => {

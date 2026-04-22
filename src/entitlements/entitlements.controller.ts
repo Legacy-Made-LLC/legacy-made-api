@@ -1,4 +1,13 @@
-import { Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { ApiClsService } from 'src/lib/api-cls.service';
 import { RevenuecatService } from 'src/revenuecat/revenuecat.service';
 import { EntitlementsService } from './entitlements.service';
@@ -24,11 +33,28 @@ export class EntitlementsController {
    * RC (missed webhook, dev DB tampering). FE calls this on Restore
    * Purchases and from the activating screen's manual refresh.
    *
-   * Idempotent and safe to call repeatedly.
+   * Throttled because each call hits RC's REST API. Limits target the
+   * realistic FE flow (one call per Restore tap) with a small burst
+   * margin for the activating screen's manual refresh button.
+   *
+   * Forbidden in trusted-contact context: the caller's own subscription
+   * is unrelated to the plan they're acting on, so a sync there would
+   * reconcile the wrong RC subscriber and return entitlements that
+   * don't match what we just wrote.
    */
   @Post('sync')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    short: { limit: 3, ttl: 10_000 },
+    medium: { limit: 10, ttl: 60_000 },
+  })
   async syncEntitlements(): Promise<EntitlementInfo> {
+    if (this.cls.get('planOwnerId')) {
+      throw new BadRequestException(
+        'Cannot sync entitlements from a trusted-contact context. Switch to your own plan first.',
+      );
+    }
     const userId = this.cls.requireUserId();
     await this.revenuecatService.reconcileFromRc(userId);
     return this.entitlementsService.getEntitlementInfo();
