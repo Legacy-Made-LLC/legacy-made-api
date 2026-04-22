@@ -9,6 +9,15 @@ import type { RcWebhookEvent } from './dto/webhook.dto';
 type SubscriptionStatus = 'active' | 'in_grace_period' | 'expired';
 export type EventOutcome = 'handled' | 'skipped';
 
+// Events that don't carry enough payload to update inline but signal
+// state divergence (user-id aliasing, cross-store transfer). After the
+// dedupe tx commits we reconcile against RC's REST view to catch up —
+// see processEvent().
+const RECONCILE_AFTER_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'SUBSCRIBER_ALIAS',
+  'TRANSFER',
+]);
+
 export interface ReconcileResult {
   tier: SubscriptionTier;
   status: SubscriptionStatus | null;
@@ -76,20 +85,46 @@ export class RevenuecatService {
    *
    * Idempotent by design: SET statements use deterministic values from
    * the event payload, and the dedupe insert uses ON CONFLICT DO NOTHING.
+   *
+   * Some event types (TRANSFER, SUBSCRIBER_ALIAS) signal that our row
+   * may have diverged from RC's view but don't carry enough payload to
+   * fix it inline. For those we run reconcileFromRc after the dedupe
+   * tx commits — best-effort, since RC won't redeliver the event once
+   * dedupe is recorded. A reconcile failure is logged for follow-up.
    */
   async processEvent(event: RcWebhookEvent): Promise<EventOutcome> {
-    return this.db.bypassRls(async (tx) => {
-      const outcome = await this.dispatch(tx, event);
+    const outcome = await this.db.bypassRls(async (tx) => {
+      const o = await this.dispatch(tx, event);
       await tx
         .insert(processedRevenuecatEvents)
         .values({
           eventId: event.id,
           eventType: event.type,
-          outcome,
+          outcome: o,
         })
         .onConflictDoNothing({ target: processedRevenuecatEvents.eventId });
-      return outcome;
+      return o;
     });
+
+    if (RECONCILE_AFTER_EVENT_TYPES.has(event.type)) {
+      try {
+        await this.reconcileFromRc(event.app_user_id);
+      } catch (err) {
+        // Non-fatal: dedupe is already committed, so RC won't retry.
+        // Surface loudly so we can replay manually if needed.
+        this.logger.error(
+          {
+            msg: 'revenuecat_post_event_reconcile_failed',
+            eventId: event.id,
+            eventType: event.type,
+            appUserId: event.app_user_id,
+          },
+          err instanceof Error ? err.stack : undefined,
+        );
+      }
+    }
+
+    return outcome;
   }
 
   private async dispatch(
@@ -100,6 +135,10 @@ export class RevenuecatService {
       case 'INITIAL_PURCHASE':
       case 'RENEWAL':
       case 'UNCANCELLATION':
+      case 'REFUND_REVERSED':
+        // REFUND_REVERSED: a prior refund was reversed — re-entitle using
+        // the event's current product/entitlement payload. Same shape as
+        // RENEWAL for our purposes.
         await this.applyActive(tx, event);
         return 'handled';
 
@@ -125,9 +164,15 @@ export class RevenuecatService {
         await this.applyExpiration(tx, event);
         return 'handled';
 
-      case 'NON_RENEWING_PURCHASE':
       case 'SUBSCRIBER_ALIAS':
       case 'TRANSFER':
+        // Don't mutate here — payload is thin. processEvent() runs a
+        // reconcile against RC's REST view after the dedupe tx commits
+        // so any prior orphan rows (e.g., an INITIAL_PURCHASE delivered
+        // under $RCAnonymousID before logIn) get caught up.
+        return 'handled';
+
+      case 'NON_RENEWING_PURCHASE':
       case 'TEST':
       default:
         // Unknown types land here too; the controller logs 'skipped' at
@@ -205,6 +250,24 @@ export class RevenuecatService {
     tx: DrizzleTransaction,
     event: RcWebhookEvent,
   ): Promise<void> {
+    // Defense-in-depth: `notLifetime()` in the WHERE already filters
+    // lifetime rows, but expiration is the only handler that downgrades
+    // a tier, so we explicitly assert the invariant here too. If this
+    // ever logs, something is calling applyExpiration for a lifetime
+    // user and we want that visible, not silently filtered.
+    const [existing] = await tx
+      .select({ tier: subscriptions.tier })
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, event.app_user_id));
+    if (existing?.tier === 'lifetime') {
+      this.logger.warn({
+        msg: 'revenuecat_expiration_skipped_lifetime',
+        eventId: event.id,
+        appUserId: event.app_user_id,
+      });
+      return;
+    }
+
     const result = await tx
       .update(subscriptions)
       .set({
