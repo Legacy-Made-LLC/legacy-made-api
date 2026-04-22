@@ -1,5 +1,6 @@
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { ApiConfigService } from 'src/config/api-config.service';
 import { RevenuecatController } from './revenuecat.controller';
 import { RevenuecatService } from './revenuecat.service';
@@ -33,6 +34,12 @@ describe('RevenuecatController', () => {
     processEvent = jest.fn().mockResolvedValue('handled');
 
     const module: TestingModule = await Test.createTestingModule({
+      imports: [
+        ThrottlerModule.forRoot([
+          { name: 'short', ttl: 10_000, limit: 30 },
+          { name: 'medium', ttl: 60_000, limit: 200 },
+        ]),
+      ],
       controllers: [RevenuecatController],
       providers: [
         {
