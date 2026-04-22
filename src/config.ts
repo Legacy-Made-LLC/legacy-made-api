@@ -80,6 +80,14 @@ export const configSchema = z.object({
   // Authorization header of every webhook delivery; we compare it in
   // constant time. Required — the webhook endpoint is otherwise open.
   REVENUECAT_WEBHOOK_AUTH_HEADER: z.string(),
+  // RevenueCat REST API v1 secret key (Project settings → API keys →
+  // "Secret API key"). Distinct from the public per-platform keys the
+  // app uses. Used for server-driven reconciliation when the FE asks
+  // us to refresh tier from RC's source of truth (e.g. a Restore that
+  // diverges from our DB because a webhook was missed).
+  REVENUECAT_REST_API_KEY: z.string(),
+  // Override only for tests that point at a fake server.
+  REVENUECAT_API_BASE_URL: z.url().default('https://api.revenuecat.com/v1'),
   // RC entitlement identifier strings, as configured in the dashboard
   // (case-sensitive). Defaults match the convention "entitlement id ==
   // tier name". Override if the dashboard uses different slugs.

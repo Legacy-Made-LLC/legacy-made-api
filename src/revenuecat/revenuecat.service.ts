@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadGatewayException, Injectable, Logger } from '@nestjs/common';
 import { and, eq, ne } from 'drizzle-orm';
 import { ApiConfigService } from 'src/config/api-config.service';
 import { DbService, type DrizzleTransaction } from 'src/db/db.service';
@@ -9,11 +9,41 @@ import type { RcWebhookEvent } from './dto/webhook.dto';
 type SubscriptionStatus = 'active' | 'in_grace_period' | 'expired';
 export type EventOutcome = 'handled' | 'skipped';
 
+export interface ReconcileResult {
+  tier: SubscriptionTier;
+  status: SubscriptionStatus | null;
+  currentPeriodEnd: Date | null;
+  cancellationPending: boolean;
+}
+
+interface RcSubscriberSubscription {
+  expires_date: string | null;
+  store?: string | null;
+  unsubscribe_detected_at?: string | null;
+  billing_issues_detected_at?: string | null;
+  original_purchase_date?: string | null;
+}
+
+interface RcSubscriberEntitlement {
+  expires_date: string | null;
+  product_identifier?: string;
+}
+
+interface RcSubscriberPayload {
+  subscriber: {
+    original_app_user_id: string;
+    entitlements: Record<string, RcSubscriberEntitlement>;
+    subscriptions?: Record<string, RcSubscriberSubscription>;
+  };
+}
+
 @Injectable()
 export class RevenuecatService {
   private readonly logger = new Logger(RevenuecatService.name);
   private readonly entitlementIndividual: string;
   private readonly entitlementFamily: string;
+  private readonly restApiKey: string;
+  private readonly restBaseUrl: string;
 
   constructor(
     private readonly db: DbService,
@@ -23,6 +53,8 @@ export class RevenuecatService {
       'RC_ENTITLEMENT_ID_INDIVIDUAL',
     );
     this.entitlementFamily = this.config.get('RC_ENTITLEMENT_ID_FAMILY');
+    this.restApiKey = this.config.get('REVENUECAT_REST_API_KEY');
+    this.restBaseUrl = this.config.get('REVENUECAT_API_BASE_URL');
   }
 
   async isEventProcessed(eventId: string): Promise<boolean> {
@@ -271,5 +303,221 @@ export class RevenuecatService {
     if (ids.includes(this.entitlementIndividual)) return 'individual';
     if (ids.includes(this.entitlementFamily)) return 'family';
     return null;
+  }
+
+  /**
+   * Force-sync the user's subscription row against RC's REST API view of
+   * the subscriber. Used for self-healing reconciliation when our DB has
+   * diverged from RC — e.g. a webhook delivery that never landed, or
+   * (in dev) a manual DB edit. Webhooks remain the primary path; this
+   * is the safety net the FE can call from Restore Purchases or the
+   * activating screen's "force refresh" path.
+   *
+   * No-ops for lifetime users — their tier is granted manually and must
+   * never be downgraded by an RC view that doesn't know about it.
+   *
+   * Field semantics: only fields RC's subscriber endpoint actually
+   * authoritatively reports for this user are written. We never null out
+   * a webhook-set value (notably `rcOriginalTransactionId`, which the
+   * subscriber endpoint omits) — those fields are left untouched so the
+   * webhook-anchored row identity survives a reconcile.
+   */
+  async reconcileFromRc(userId: string): Promise<ReconcileResult> {
+    const payload = await this.fetchSubscriber(userId);
+    const desired = this.deriveDesiredState(payload);
+
+    return this.db.bypassRls(async (tx) => {
+      const [existing] = await tx
+        .select({
+          tier: subscriptions.tier,
+          status: subscriptions.status,
+          currentPeriodEnd: subscriptions.currentPeriodEnd,
+          unsubscribeDetectedAt: subscriptions.unsubscribeDetectedAt,
+        })
+        .from(subscriptions)
+        .where(eq(subscriptions.userId, userId));
+
+      // Lifetime users: don't touch the row, just report current state.
+      // The notLifetime() guard on the UPDATE below covers a row flipping
+      // to lifetime mid-transaction; this short-circuit avoids an unneeded
+      // write attempt for the common case.
+      if (existing?.tier === 'lifetime') {
+        return {
+          tier: 'lifetime',
+          status: existing.status as SubscriptionStatus | null,
+          currentPeriodEnd: existing.currentPeriodEnd,
+          cancellationPending: existing.unsubscribeDetectedAt !== null,
+        };
+      }
+
+      // Build the SET payload by including only fields the RC payload
+      // gave us authoritative values for. Drizzle-set-with-undefined
+      // would still write a column, so we strip undefined first.
+      const setPayload: Record<string, unknown> = {
+        tier: desired.tier,
+        status: desired.status,
+        currentPeriodEnd: desired.currentPeriodEnd,
+      };
+      if (desired.rcProductId !== undefined) {
+        setPayload.rcProductId = desired.rcProductId;
+      }
+      if (desired.rcStore !== undefined) {
+        setPayload.rcStore = desired.rcStore;
+      }
+      if (desired.unsubscribeDetectedAt !== undefined) {
+        setPayload.unsubscribeDetectedAt = desired.unsubscribeDetectedAt;
+      }
+
+      const result = await tx
+        .update(subscriptions)
+        .set(setPayload)
+        .where(this.notLifetime(userId))
+        .returning({ userId: subscriptions.userId });
+
+      if (result.length === 0) {
+        // No row exists for this user. The user-bootstrap flow (sign-up)
+        // is responsible for creating the free-tier row; we don't insert
+        // here so reconcile stays a pure "align with RC" operation.
+        this.logger.warn({
+          msg: 'revenuecat_reconcile_no_row',
+          userId,
+          desiredTier: desired.tier,
+        });
+      }
+
+      return {
+        tier: desired.tier,
+        status: desired.status,
+        currentPeriodEnd: desired.currentPeriodEnd,
+        // Report the existing flag if RC didn't give us a fresh value,
+        // so callers don't observe a transient "cancellation cleared".
+        cancellationPending:
+          desired.unsubscribeDetectedAt !== undefined
+            ? desired.unsubscribeDetectedAt !== null
+            : existing?.unsubscribeDetectedAt !== null &&
+              existing?.unsubscribeDetectedAt !== undefined,
+      };
+    });
+  }
+
+  private async fetchSubscriber(userId: string): Promise<RcSubscriberPayload> {
+    const url = `${this.restBaseUrl}/subscribers/${encodeURIComponent(userId)}`;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${this.restApiKey}`,
+          Accept: 'application/json',
+        },
+      });
+    } catch (err) {
+      // Network failure (DNS, TCP). Treat as a transient upstream issue.
+      throw new BadGatewayException(
+        `RevenueCat REST request failed: ${
+          err instanceof Error ? err.message : 'unknown'
+        }`,
+      );
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      // RC's GET /v1/subscribers/{id} auto-creates the customer if
+      // unknown, so non-2xx here means upstream config (bad key) or RC
+      // outage — not "user doesn't exist". Map to 502 so the FE can
+      // distinguish from a real 4xx on /entitlements/sync itself.
+      this.logger.error({
+        msg: 'revenuecat_reconcile_upstream_failure',
+        status: res.status,
+        body: body.slice(0, 200),
+      });
+      throw new BadGatewayException(
+        `RevenueCat REST ${res.status}: ${body.slice(0, 120)}`,
+      );
+    }
+    return (await res.json()) as RcSubscriberPayload;
+  }
+
+  // Translate the RC subscriber payload into the row state we'd write.
+  // Mirrors the webhook handlers' logic: an active entitlement maps to
+  // the corresponding tier; otherwise we revert to free/expired.
+  //
+  // A field returned as `undefined` means "RC didn't give us a value
+  // here — preserve the existing row value." A field returned as `null`
+  // means "RC explicitly told us this is empty — write the null."
+  private deriveDesiredState(payload: RcSubscriberPayload): {
+    tier: SubscriptionTier;
+    status: SubscriptionStatus | null;
+    rcProductId: string | null | undefined;
+    rcStore: string | null | undefined;
+    currentPeriodEnd: Date | null;
+    unsubscribeDetectedAt: Date | null | undefined;
+  } {
+    const now = Date.now();
+    const subscriber = payload.subscriber;
+    const ents = subscriber.entitlements ?? {};
+
+    // RC convention: a non-subscription entitlement (e.g. a lifetime
+    // grant via promo) reports `expires_date === null`. We don't issue
+    // those for paid tiers, so treat null as "no expiration recorded"
+    // and accept it as active — same as the SDK's CustomerInfo logic.
+    const isActive = (e: RcSubscriberEntitlement | undefined) =>
+      !!e &&
+      (e.expires_date === null ||
+        (e.expires_date !== undefined &&
+          new Date(e.expires_date).getTime() > now));
+
+    let tier: Extract<SubscriptionTier, 'individual' | 'family'> | null = null;
+    let entitlement: RcSubscriberEntitlement | undefined;
+    if (isActive(ents[this.entitlementIndividual])) {
+      tier = 'individual';
+      entitlement = ents[this.entitlementIndividual];
+    } else if (isActive(ents[this.entitlementFamily])) {
+      tier = 'family';
+      entitlement = ents[this.entitlementFamily];
+    }
+
+    if (!tier || !entitlement) {
+      // No active entitlement: align with the EXPIRATION webhook handler.
+      // Explicit nulls so any leftover store/product/cancellation flags
+      // from a prior period are cleared.
+      return {
+        tier: 'free',
+        status: 'expired',
+        rcProductId: null,
+        rcStore: null,
+        currentPeriodEnd: null,
+        unsubscribeDetectedAt: null,
+      };
+    }
+
+    const productId = entitlement.product_identifier ?? null;
+    const sub = productId ? subscriber.subscriptions?.[productId] : undefined;
+
+    const status: SubscriptionStatus = sub?.billing_issues_detected_at
+      ? 'in_grace_period'
+      : 'active';
+
+    // If we found a matching subscription block, RC's view of this
+    // product is authoritative — write its store/cancellation fields,
+    // including explicit null when RC reports it. If the entitlement
+    // came from a promo/grant with no subscription block, leave those
+    // fields untouched (undefined) so a webhook-set value survives.
+    return {
+      tier,
+      status,
+      rcProductId: productId,
+      // `undefined` (preserve existing) when RC didn't return a
+      // subscription block for this product — common for promotional
+      // grants; otherwise RC's value (including explicit null).
+      rcStore: sub === undefined ? undefined : (sub.store ?? null),
+      currentPeriodEnd: entitlement.expires_date
+        ? new Date(entitlement.expires_date)
+        : null,
+      unsubscribeDetectedAt:
+        sub === undefined
+          ? undefined
+          : sub.unsubscribe_detected_at
+            ? new Date(sub.unsubscribe_detected_at)
+            : null,
+    };
   }
 }
