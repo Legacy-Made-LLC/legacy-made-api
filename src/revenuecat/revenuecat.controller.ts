@@ -8,7 +8,9 @@ import {
   Logger,
   Post,
   UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { BypassJwtAuth } from 'src/auth/auth.guard';
 import { ApiConfigService } from 'src/config/api-config.service';
 import { RevenuecatWebhookDto } from './dto/webhook.dto';
@@ -23,9 +25,22 @@ export class RevenuecatController {
     private readonly config: ApiConfigService,
   ) {}
 
+  /**
+   * Throttled by source IP. RC delivers from a small egress pool, so legit
+   * traffic shares an IP — limits sit well above realistic RC volume (a
+   * handful of events/sec at peak, even with sandbox accelerated renewals)
+   * while still capping unauthenticated spam from any single source. The
+   * guard runs before the auth-header check, so failed-auth requests are
+   * counted too.
+   */
   @BypassJwtAuth()
   @Post('revenuecat')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    short: { limit: 30, ttl: 10_000 },
+    medium: { limit: 200, ttl: 60_000 },
+  })
   async handleWebhook(
     @Headers('authorization') authHeader: string | undefined,
     @Body() dto: RevenuecatWebhookDto,
