@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { and, count, desc, eq, gte, isNull, ne, or, sum } from 'drizzle-orm';
+import { and, count, eq, gte, isNull, ne, or, sql, sum } from 'drizzle-orm';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import {
@@ -345,7 +345,20 @@ export class EntitlementsService {
           ),
         ),
       )
-      .orderBy(desc(masterSubscriptions.tier))
+      // Rank by semantic tier strength, not lexical sort. Locked to
+      // 'individual' for MVP so this is a no-op today, but Phase 2's
+      // family-tier subs would mis-rank under `ORDER BY tier DESC`
+      // (lexically 'individual' > 'family'). Lifetime would never appear
+      // here — it's a D2C-only grant — but we include it for completeness
+      // in case of future master sub product changes.
+      .orderBy(
+        sql`CASE ${masterSubscriptions.tier}
+              WHEN 'lifetime' THEN 3
+              WHEN 'family' THEN 2
+              WHEN 'individual' THEN 1
+              ELSE 0
+            END DESC`,
+      )
       .limit(1);
 
     if (!row) return null;
