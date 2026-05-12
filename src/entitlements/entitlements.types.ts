@@ -1,6 +1,26 @@
 export type SubscriptionTier = 'free' | 'individual' | 'family' | 'lifetime';
 
 /**
+ * Where the user's tier comes from. Drives paywall + "Manage Subscription"
+ * UI on the mobile app: only `d2c` should see RC upgrade affordances.
+ *
+ * - `d2c`: paid RevenueCat subscription (App Store / Play Store)
+ * - `b2b`: active seat on an active master subscription (group license)
+ * - `lifetime`: manually-granted lifetime tier on the D2C row
+ * - `none`: free tier with no active subscription anywhere
+ */
+export type EntitlementSource = 'd2c' | 'b2b' | 'lifetime' | 'none';
+
+export interface EffectiveTier {
+  tier: SubscriptionTier;
+  source: EntitlementSource;
+  /** Set only when source === 'b2b'. */
+  masterSubscriptionId?: string;
+  /** Master subscription `display_name`. Set only when source === 'b2b'. */
+  providerName?: string;
+}
+
+/**
  * Webhook-derived lifecycle state for a paid subscription. NULL for users
  * who have never had a paid subscription (free tier by default). Mirrors
  * the CHECK constraint on subscriptions.status.
@@ -61,6 +81,11 @@ export interface EntitlementInfo {
    * Lifecycle metadata derived from the RC webhook pipeline. Optional so
    * older clients that ignore it continue to work. `null` status + `null`
    * currentPeriodEnd is the default for free/never-paid users.
+   *
+   * Always reflects the D2C subscription state. A B2B member may still
+   * have a (now-redundant) personal RC sub — clients gate on
+   * `entitlementSource` rather than this field to decide whether to show
+   * "Manage Subscription".
    */
   subscription: {
     status: SubscriptionStatus | null;
@@ -73,4 +98,10 @@ export interface EntitlementInfo {
      */
     cancellationPending: boolean;
   };
+  /** Which lane granted the effective tier. */
+  entitlementSource: EntitlementSource;
+  /** Set when entitlementSource === 'b2b'. */
+  masterSubscriptionId?: string;
+  /** Master subscription `display_name`; set when entitlementSource === 'b2b'. */
+  providerName?: string;
 }
