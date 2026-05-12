@@ -24,6 +24,7 @@ import { AccessInvitationsModule } from './access-invitations/access-invitations
 import { PlanAccessModule } from './plan-access/plan-access.module';
 import { SharedPlansModule } from './shared-plans/shared-plans.module';
 import { ActivityLogModule } from './activity-log/activity-log.module';
+import { AdminModule } from './admin/admin.module';
 import { MessagesModule } from './messages/messages.module';
 import { EncryptionModule } from './encryption/encryption.module';
 import { PushNotificationsModule } from './push-notifications/push-notifications.module';
@@ -74,6 +75,7 @@ import { RevenuecatModule } from './revenuecat/revenuecat.module';
     EncryptionModule,
     PreferencesModule,
     RevenuecatModule,
+    AdminModule,
   ],
   providers: [
     {
