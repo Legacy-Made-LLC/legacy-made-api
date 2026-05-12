@@ -183,10 +183,11 @@ async function cmdSetPeriodEnd({ flags }: Argv) {
   );
 }
 
-// Invite generation is reserved for #25 (the invitation flow PR).
-async function cmdInvite() {
-  die(
-    'invite is not implemented yet — lands with #25 (master subscription invitation flow)',
+async function cmdInvite({ flags }: Argv) {
+  const id = requireFlag(flags, 'id');
+  const email = requireFlag(flags, 'email');
+  out(
+    await api('POST', `/admin/master-subscriptions/${id}/invites`, { email }),
   );
 }
 
@@ -224,7 +225,7 @@ function help(): never {
       '  set-status         --id <id> --status <active|past_due|suspended|cancelled>',
       '  set-seats          --id <id> --seats <n>',
       '  set-period-end     --id <id> [--date <iso>]',
-      '  invite             --id <id> --email <e>    (lands with #25)',
+      '  invite             --id <id> --email <e>',
       '',
     ].join('\n'),
   );

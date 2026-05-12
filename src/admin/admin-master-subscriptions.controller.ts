@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -59,5 +60,18 @@ export class AdminMasterSubscriptionsController {
   @Get(':id/members')
   listMembers(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.listMembers(id);
+  }
+
+  @Post(':id/invites')
+  @HttpCode(HttpStatus.CREATED)
+  invite(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { email?: string },
+  ) {
+    if (!body?.email) {
+      throw new BadRequestException('email is required');
+    }
+    const actorUserId = this.cls.requireUserId();
+    return this.service.inviteMember(id, body.email, actorUserId);
   }
 }

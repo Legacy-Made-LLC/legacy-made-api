@@ -16,6 +16,7 @@ describe('AdminMasterSubscriptionsController', () => {
       getById: jest.fn(),
       update: jest.fn(),
       listMembers: jest.fn(),
+      inviteMember: jest.fn(),
     } as unknown as jest.Mocked<MasterSubscriptionsService>;
     cls = { requireUserId: jest.fn().mockReturnValue('user_admin') };
 
@@ -80,5 +81,29 @@ describe('AdminMasterSubscriptionsController', () => {
     await expect(controller.listMembers('sub_1')).resolves.toEqual([
       { id: 'member_1' },
     ]);
+  });
+
+  it('invite delegates to service.inviteMember with actor user id', async () => {
+    service.inviteMember.mockResolvedValue({
+      token: 't',
+      acceptanceUrl: 'https://app/team-invitation?token=t',
+      memberId: 'member_new',
+      invitedEmail: 'jane@example.com',
+    });
+
+    const result = await controller.invite('sub_1', {
+      email: 'jane@example.com',
+    });
+
+    expect(service.inviteMember).toHaveBeenCalledWith(
+      'sub_1',
+      'jane@example.com',
+      'user_admin',
+    );
+    expect(result.acceptanceUrl).toContain('team-invitation');
+  });
+
+  it('invite rejects when email is missing', () => {
+    expect(() => controller.invite('sub_1', {})).toThrow(/email is required/);
   });
 });

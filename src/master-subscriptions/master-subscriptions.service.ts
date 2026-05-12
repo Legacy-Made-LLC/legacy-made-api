@@ -1,10 +1,12 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { ApiConfigService } from '../config/api-config.service';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import {
   MasterSubscription,
@@ -16,6 +18,7 @@ import {
 } from '../schema';
 import { CreateMasterSubscriptionDto } from './dto/create-master-subscription.dto';
 import { UpdateMasterSubscriptionDto } from './dto/update-master-subscription.dto';
+import { MasterSubInvitationTokenService } from './master-subscription-invitation-token.service';
 
 /**
  * Valid status transitions. `cancelled` is terminal — once a master sub
@@ -37,9 +40,26 @@ export type MasterSubscriptionWithMembers = MasterSubscription & {
   members: MasterSubscriptionMember[];
 };
 
+export interface InvitationPreview {
+  providerName: string;
+  ownerName: string | null;
+  invitedEmail: string;
+  status: 'pending_invite' | 'active' | 'removed';
+  masterSubscriptionStatus: string;
+}
+
+export interface AcceptInviteResult {
+  member: MasterSubscriptionMember;
+  masterSubscription: MasterSubscription;
+}
+
 @Injectable()
 export class MasterSubscriptionsService {
-  constructor(private readonly db: DbService) {}
+  constructor(
+    private readonly db: DbService,
+    private readonly tokens: MasterSubInvitationTokenService,
+    private readonly config: ApiConfigService,
+  ) {}
 
   // ---------------------------------------------------------------------------
   // Master subscriptions
@@ -298,6 +318,284 @@ export class MasterSubscriptionsService {
       });
 
       return updated;
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Invitations
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Admin-side invite generation. Creates a `pending_invite` member row,
+   * signs a JWT, returns the acceptance URL. Email-locked: only the email
+   * carried in the token can later accept.
+   */
+  async inviteMember(
+    masterSubscriptionId: string,
+    email: string,
+    actorUserId: string,
+  ): Promise<{
+    token: string;
+    acceptanceUrl: string;
+    memberId: string;
+    invitedEmail: string;
+  }> {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail || !normalizedEmail.includes('@')) {
+      throw new BadRequestException('A valid email is required');
+    }
+
+    return this.db.bypassRls(async (tx) => {
+      const [sub] = await tx
+        .select()
+        .from(masterSubscriptions)
+        .where(eq(masterSubscriptions.id, masterSubscriptionId));
+      if (!sub) {
+        throw new NotFoundException(
+          `Master subscription not found: ${masterSubscriptionId}`,
+        );
+      }
+      if (sub.status !== 'active') {
+        throw new UnprocessableEntityException(
+          `Cannot invite to a master subscription with status=${sub.status}. Reactivate first.`,
+        );
+      }
+
+      // Reject if there's already an active or pending invite for this email
+      const [existingActive] = await tx
+        .select({ id: masterSubscriptionMembers.id })
+        .from(masterSubscriptionMembers)
+        .where(
+          and(
+            eq(
+              masterSubscriptionMembers.masterSubscriptionId,
+              masterSubscriptionId,
+            ),
+            eq(masterSubscriptionMembers.invitedEmail, normalizedEmail),
+            inArray(
+              masterSubscriptionMembers.status,
+              SEAT_CONSUMING_STATUSES as unknown as string[],
+            ),
+          ),
+        );
+      if (existingActive) {
+        throw new ConflictException(
+          `${normalizedEmail} already has an active or pending invite. Remove the existing member first to re-invite.`,
+        );
+      }
+
+      // Seat capacity check including this new invite
+      const used = await this.countSeatsInTx(tx, masterSubscriptionId);
+      if (used >= sub.seatLimit) {
+        throw new UnprocessableEntityException(
+          `All ${sub.seatLimit} seats are in use. Free a seat or raise seat_limit first.`,
+        );
+      }
+
+      const [member] = await tx
+        .insert(masterSubscriptionMembers)
+        .values({
+          masterSubscriptionId,
+          invitedEmail: normalizedEmail,
+          status: 'pending_invite',
+        })
+        .returning();
+
+      const token = this.tokens.generateToken({
+        masterSubscriptionId,
+        memberId: member.id,
+        email: normalizedEmail,
+      });
+
+      const baseUrl = this.config.get('INVITATION_BASE_URL').replace(/\/$/, '');
+      const acceptanceUrl = `${baseUrl}/team-invitation?token=${encodeURIComponent(token)}`;
+
+      await this.writeAuditInTx(tx, {
+        masterSubscriptionId,
+        actorUserId,
+        action: 'invited',
+        targetMemberId: member.id,
+        metadata: { invitedEmail: normalizedEmail },
+      });
+
+      return {
+        token,
+        acceptanceUrl,
+        memberId: member.id,
+        invitedEmail: normalizedEmail,
+      };
+    });
+  }
+
+  /**
+   * Public preview of an invite token. Does NOT consume the invite. Used
+   * by the web fallback page and the in-app preview screen before the
+   * user authenticates.
+   */
+  async previewInvite(token: string): Promise<InvitationPreview> {
+    const payload = this.tokens.verifyToken(token);
+
+    return this.db.bypassRls(async (tx) => {
+      const [member] = await tx
+        .select({
+          id: masterSubscriptionMembers.id,
+          status: masterSubscriptionMembers.status,
+          invitedEmail: masterSubscriptionMembers.invitedEmail,
+          masterSubscriptionId: masterSubscriptionMembers.masterSubscriptionId,
+        })
+        .from(masterSubscriptionMembers)
+        .where(eq(masterSubscriptionMembers.id, payload.memberId));
+
+      if (
+        !member ||
+        member.masterSubscriptionId !== payload.masterSubscriptionId
+      ) {
+        throw new NotFoundException(
+          'This invitation no longer exists. Ask the sender for a fresh invite.',
+        );
+      }
+
+      const [sub] = await tx
+        .select({
+          displayName: masterSubscriptions.displayName,
+          status: masterSubscriptions.status,
+          ownerUserId: masterSubscriptions.ownerUserId,
+        })
+        .from(masterSubscriptions)
+        .where(eq(masterSubscriptions.id, member.masterSubscriptionId));
+
+      if (!sub) {
+        throw new NotFoundException(
+          'The provider for this invitation is no longer available.',
+        );
+      }
+
+      const [owner] = await tx
+        .select({ firstName: users.firstName, lastName: users.lastName })
+        .from(users)
+        .where(eq(users.id, sub.ownerUserId));
+      const ownerName = owner
+        ? [owner.firstName, owner.lastName].filter(Boolean).join(' ').trim() ||
+          null
+        : null;
+
+      return {
+        providerName: sub.displayName,
+        ownerName,
+        invitedEmail: member.invitedEmail,
+        status: member.status as 'pending_invite' | 'active' | 'removed',
+        masterSubscriptionStatus: sub.status,
+      };
+    });
+  }
+
+  /**
+   * Accept an invitation. The token itself is the security boundary —
+   * we don't email-lock acceptance, so the recipient can sign in with
+   * any account they own (work email got the invite but they prefer
+   * a personal account, for example). Mirrors the trusted-contacts
+   * pattern (see `access-invitations.service.ts`).
+   *
+   * Verifies seat capacity at accept time so a slow acceptance can't
+   * oversubscribe a sub that's filled up in the meantime.
+   */
+  async acceptInvite(
+    token: string,
+    acceptingUserId: string,
+  ): Promise<AcceptInviteResult> {
+    const payload = this.tokens.verifyToken(token);
+
+    return this.db.bypassRls(async (tx) => {
+      const [member] = await tx
+        .select()
+        .from(masterSubscriptionMembers)
+        .where(eq(masterSubscriptionMembers.id, payload.memberId));
+
+      if (
+        !member ||
+        member.masterSubscriptionId !== payload.masterSubscriptionId
+      ) {
+        throw new NotFoundException(
+          'This invitation no longer exists. Ask the sender for a fresh invite.',
+        );
+      }
+
+      if (member.status === 'active') {
+        throw new ConflictException(
+          'This invitation has already been accepted.',
+        );
+      }
+      if (member.status === 'removed') {
+        throw new UnprocessableEntityException(
+          'This invitation has been revoked. Ask the sender to re-invite.',
+        );
+      }
+
+      const [sub] = await tx
+        .select()
+        .from(masterSubscriptions)
+        .where(eq(masterSubscriptions.id, member.masterSubscriptionId));
+      if (!sub) {
+        throw new NotFoundException(
+          'The provider for this invitation is no longer available.',
+        );
+      }
+      if (sub.status !== 'active') {
+        throw new UnprocessableEntityException(
+          `This master subscription is ${sub.status}. Ask the provider to reactivate before accepting.`,
+        );
+      }
+      const now = new Date();
+      if (sub.currentPeriodEnd && sub.currentPeriodEnd < now) {
+        throw new UnprocessableEntityException(
+          'This master subscription has lapsed. Ask the provider for a fresh invite.',
+        );
+      }
+
+      // Re-check seat capacity at accept time — only count seats other
+      // than this pending invite (we're about to flip it to active).
+      const [usedRow] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(masterSubscriptionMembers)
+        .where(
+          and(
+            eq(
+              masterSubscriptionMembers.masterSubscriptionId,
+              member.masterSubscriptionId,
+            ),
+            inArray(
+              masterSubscriptionMembers.status,
+              SEAT_CONSUMING_STATUSES as unknown as string[],
+            ),
+            sql`${masterSubscriptionMembers.id} != ${payload.memberId}`,
+          ),
+        );
+      const otherSeats = usedRow?.count ?? 0;
+      if (otherSeats + 1 > sub.seatLimit) {
+        throw new ConflictException(
+          `All ${sub.seatLimit} seats are taken. Ask the provider to free a seat or expand the plan.`,
+        );
+      }
+
+      const [updated] = await tx
+        .update(masterSubscriptionMembers)
+        .set({
+          status: 'active',
+          userId: acceptingUserId,
+          joinedAt: now,
+        })
+        .where(eq(masterSubscriptionMembers.id, payload.memberId))
+        .returning();
+
+      await this.writeAuditInTx(tx, {
+        masterSubscriptionId: member.masterSubscriptionId,
+        actorUserId: acceptingUserId,
+        action: 'invite_accepted',
+        targetMemberId: payload.memberId,
+        metadata: { invitedEmail: payload.email },
+      });
+
+      return { member: updated, masterSubscription: sub };
     });
   }
 

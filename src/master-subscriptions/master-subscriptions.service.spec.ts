@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  ConflictException,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { ApiConfigService } from '../config/api-config.service';
 import { DbService } from '../db/db.service';
 import {
   masterSubscriptionAuditLog,
@@ -11,6 +13,7 @@ import {
   masterSubscriptions,
   users,
 } from '../schema';
+import { MasterSubInvitationTokenService } from './master-subscription-invitation-token.service';
 import { MasterSubscriptionsService } from './master-subscriptions.service';
 
 /**
@@ -24,12 +27,24 @@ import { MasterSubscriptionsService } from './master-subscriptions.service';
  */
 function makeMockTx(
   opts: {
+    /** Table → single result returned for every query against that table. */
     select?: Map<unknown, unknown[]>;
+    /**
+     * Table → FIFO queue of results, one consumed per `.where()` resolution.
+     * Use when a method runs multiple queries against the same table with
+     * different expected shapes (e.g., existing-member check followed by
+     * seat-count). Falls through to `select` when the queue is empty.
+     */
+    selectQueue?: Map<unknown, unknown[][]>;
     insertReturning?: Map<unknown, unknown[]>;
     updateReturning?: Map<unknown, unknown[]>;
   } = {},
 ) {
   const selectMap = opts.select ?? new Map();
+  const selectQueueMap = new Map<unknown, unknown[][]>();
+  if (opts.selectQueue) {
+    for (const [k, v] of opts.selectQueue) selectQueueMap.set(k, [...v]);
+  }
   const insertMap = opts.insertReturning ?? new Map();
   const updateMap = opts.updateReturning ?? new Map();
 
@@ -41,6 +56,12 @@ function makeMockTx(
   const inserts: { table: unknown; values: unknown }[] = [];
   const updates: { table: unknown; set: unknown }[] = [];
 
+  const resolveSelect = (): unknown[] => {
+    const queue = selectQueueMap.get(lastFrom);
+    if (queue && queue.length > 0) return queue.shift()!;
+    return selectMap.get(lastFrom) ?? [];
+  };
+
   const selectChain: any = {
     from: jest.fn((tbl: unknown) => {
       lastFrom = tbl;
@@ -51,11 +72,10 @@ function makeMockTx(
     orderBy: jest.fn(() => selectChain),
     limit: jest.fn(() => selectChain),
     then: (onF: any, onR: any) =>
-      Promise.resolve(selectMap.get(lastFrom) ?? []).then(onF, onR),
-    catch: (onR: any) =>
-      Promise.resolve(selectMap.get(lastFrom) ?? []).catch(onR),
+      Promise.resolve(resolveSelect()).then(onF, onR),
+    catch: (onR: any) => Promise.resolve(resolveSelect()).catch(onR),
     finally: (onFinally: any) =>
-      Promise.resolve(selectMap.get(lastFrom) ?? []).finally(onFinally),
+      Promise.resolve(resolveSelect()).finally(onFinally),
   };
 
   const insertChain: any = {
@@ -104,13 +124,28 @@ describe('MasterSubscriptionsService', () => {
     mockDb.rls.mockImplementation((cb) => cb(captured.tx));
   };
 
+  let mockTokens: { generateToken: jest.Mock; verifyToken: jest.Mock };
+  let mockConfig: { get: jest.Mock };
+
   beforeEach(async () => {
     mockDb = { bypassRls: jest.fn(), rls: jest.fn() };
+    mockTokens = {
+      generateToken: jest.fn().mockReturnValue('mock.jwt.token'),
+      verifyToken: jest.fn(),
+    };
+    mockConfig = {
+      get: jest.fn((key: string) => {
+        if (key === 'INVITATION_BASE_URL') return 'https://app.example.com';
+        return undefined;
+      }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MasterSubscriptionsService,
         { provide: DbService, useValue: mockDb },
+        { provide: MasterSubInvitationTokenService, useValue: mockTokens },
+        { provide: ApiConfigService, useValue: mockConfig },
       ],
     }).compile();
 
@@ -443,6 +478,340 @@ describe('MasterSubscriptionsService', () => {
       await expect(service.listMembers('missing')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('inviteMember', () => {
+    it('creates a pending_invite member, returns acceptance URL, writes audit', async () => {
+      runWith({
+        selectQueue: new Map<unknown, unknown[][]>([
+          [
+            masterSubscriptions,
+            [[{ id: 'sub_1', status: 'active', seatLimit: 25 }]],
+          ],
+          [
+            masterSubscriptionMembers,
+            [
+              [], // no existing invite
+              [{ count: 5 }], // 5 seats used, plenty of capacity
+            ],
+          ],
+        ]),
+        insertReturning: new Map<unknown, unknown[]>([
+          [
+            masterSubscriptionMembers,
+            [{ id: 'member_new', invitedEmail: 'jane@example.com' }],
+          ],
+        ]),
+      });
+
+      const result = await service.inviteMember(
+        'sub_1',
+        'JANE@example.com',
+        'user_admin',
+      );
+
+      expect(mockTokens.generateToken).toHaveBeenCalledWith({
+        masterSubscriptionId: 'sub_1',
+        memberId: 'member_new',
+        email: 'jane@example.com', // normalized to lowercase
+      });
+      expect(result.acceptanceUrl).toBe(
+        'https://app.example.com/team-invitation?token=mock.jwt.token',
+      );
+      expect(result.invitedEmail).toBe('jane@example.com');
+      // member insert + audit log insert
+      const auditInserts = captured.inserts.filter(
+        (i) => i.table === masterSubscriptionAuditLog,
+      );
+      expect(auditInserts).toHaveLength(1);
+      expect((auditInserts[0].values as Record<string, unknown>).action).toBe(
+        'invited',
+      );
+    });
+
+    it('rejects when seats are full', async () => {
+      runWith({
+        selectQueue: new Map<unknown, unknown[][]>([
+          [
+            masterSubscriptions,
+            [[{ id: 'sub_1', status: 'active', seatLimit: 25 }]],
+          ],
+          [
+            masterSubscriptionMembers,
+            [
+              [], // no existing invite
+              [{ count: 25 }], // all 25 seats used
+            ],
+          ],
+        ]),
+      });
+
+      await expect(
+        service.inviteMember('sub_1', 'new@example.com', 'user_admin'),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+
+    it('rejects when the email already has a pending or active invite', async () => {
+      runWith({
+        selectQueue: new Map<unknown, unknown[][]>([
+          [
+            masterSubscriptions,
+            [[{ id: 'sub_1', status: 'active', seatLimit: 25 }]],
+          ],
+          [
+            masterSubscriptionMembers,
+            [[{ id: 'existing_member' }]], // already exists
+          ],
+        ]),
+      });
+
+      await expect(
+        service.inviteMember('sub_1', 'dup@example.com', 'user_admin'),
+      ).rejects.toThrow(/already has an active or pending invite/);
+    });
+
+    it('rejects when the master subscription is not active', async () => {
+      runWith({
+        selectQueue: new Map<unknown, unknown[][]>([
+          [
+            masterSubscriptions,
+            [[{ id: 'sub_1', status: 'suspended', seatLimit: 25 }]],
+          ],
+        ]),
+      });
+
+      await expect(
+        service.inviteMember('sub_1', 'new@example.com', 'user_admin'),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+  });
+
+  describe('previewInvite', () => {
+    beforeEach(() => {
+      mockTokens.verifyToken.mockReturnValue({
+        masterSubscriptionId: 'sub_1',
+        memberId: 'member_1',
+        email: 'jane@example.com',
+      });
+    });
+
+    it('returns preview data when the invite exists', async () => {
+      runWith({
+        selectQueue: new Map<unknown, unknown[][]>([
+          [
+            masterSubscriptionMembers,
+            [
+              [
+                {
+                  id: 'member_1',
+                  status: 'pending_invite',
+                  invitedEmail: 'jane@example.com',
+                  masterSubscriptionId: 'sub_1',
+                },
+              ],
+            ],
+          ],
+          [
+            masterSubscriptions,
+            [
+              [
+                {
+                  displayName: 'Acme Estate Planning',
+                  status: 'active',
+                  ownerUserId: 'user_owner',
+                },
+              ],
+            ],
+          ],
+          [users, [[{ firstName: 'Pat', lastName: 'Owner' }]]],
+        ]),
+      });
+
+      const preview = await service.previewInvite('valid.token');
+
+      expect(preview.providerName).toBe('Acme Estate Planning');
+      expect(preview.ownerName).toBe('Pat Owner');
+      expect(preview.invitedEmail).toBe('jane@example.com');
+      expect(preview.status).toBe('pending_invite');
+      expect(preview.masterSubscriptionStatus).toBe('active');
+    });
+
+    it('404s when the member row was deleted out from under the token', async () => {
+      runWith({
+        selectQueue: new Map<unknown, unknown[][]>([
+          [masterSubscriptionMembers, [[]]],
+        ]),
+      });
+
+      await expect(service.previewInvite('valid.token')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('acceptInvite', () => {
+    beforeEach(() => {
+      mockTokens.verifyToken.mockReturnValue({
+        masterSubscriptionId: 'sub_1',
+        memberId: 'member_1',
+        email: 'jane@example.com',
+      });
+    });
+
+    it('accepts when master sub is active with capacity (no email lock)', async () => {
+      runWith({
+        selectQueue: new Map<unknown, unknown[][]>([
+          [
+            masterSubscriptionMembers,
+            [
+              [
+                {
+                  id: 'member_1',
+                  masterSubscriptionId: 'sub_1',
+                  status: 'pending_invite',
+                  invitedEmail: 'jane@example.com',
+                },
+              ],
+              [{ count: 5 }], // other seats used
+            ],
+          ],
+          [
+            masterSubscriptions,
+            [
+              [
+                {
+                  id: 'sub_1',
+                  status: 'active',
+                  seatLimit: 25,
+                  currentPeriodEnd: null,
+                },
+              ],
+            ],
+          ],
+        ]),
+        updateReturning: new Map<unknown, unknown[]>([
+          [
+            masterSubscriptionMembers,
+            [
+              {
+                id: 'member_1',
+                status: 'active',
+                userId: 'user_jane',
+              },
+            ],
+          ],
+        ]),
+      });
+
+      const result = await service.acceptInvite('valid.token', 'user_jane');
+
+      expect(result.member.status).toBe('active');
+      const auditInserts = captured.inserts.filter(
+        (i) => i.table === masterSubscriptionAuditLog,
+      );
+      expect((auditInserts[0].values as Record<string, unknown>).action).toBe(
+        'invite_accepted',
+      );
+    });
+
+    it('rejects when the invitation has already been accepted', async () => {
+      runWith({
+        selectQueue: new Map<unknown, unknown[][]>([
+          [
+            masterSubscriptionMembers,
+            [
+              [
+                {
+                  id: 'member_1',
+                  masterSubscriptionId: 'sub_1',
+                  status: 'active',
+                  invitedEmail: 'jane@example.com',
+                },
+              ],
+            ],
+          ],
+        ]),
+      });
+
+      await expect(
+        service.acceptInvite('valid.token', 'user_jane'),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('rejects when the master subscription has lapsed (currentPeriodEnd in the past)', async () => {
+      runWith({
+        selectQueue: new Map<unknown, unknown[][]>([
+          [
+            masterSubscriptionMembers,
+            [
+              [
+                {
+                  id: 'member_1',
+                  masterSubscriptionId: 'sub_1',
+                  status: 'pending_invite',
+                  invitedEmail: 'jane@example.com',
+                },
+              ],
+            ],
+          ],
+          [
+            masterSubscriptions,
+            [
+              [
+                {
+                  id: 'sub_1',
+                  status: 'active',
+                  seatLimit: 25,
+                  currentPeriodEnd: new Date(Date.now() - 1000 * 60 * 60),
+                },
+              ],
+            ],
+          ],
+        ]),
+      });
+
+      await expect(
+        service.acceptInvite('valid.token', 'user_jane'),
+      ).rejects.toThrow(/lapsed/);
+    });
+
+    it('rejects when seats fill up between invite and accept', async () => {
+      runWith({
+        selectQueue: new Map<unknown, unknown[][]>([
+          [
+            masterSubscriptionMembers,
+            [
+              [
+                {
+                  id: 'member_1',
+                  masterSubscriptionId: 'sub_1',
+                  status: 'pending_invite',
+                  invitedEmail: 'jane@example.com',
+                },
+              ],
+              [{ count: 25 }], // 25 other seats, sub.seatLimit is 25 → +1 overflow
+            ],
+          ],
+          [
+            masterSubscriptions,
+            [
+              [
+                {
+                  id: 'sub_1',
+                  status: 'active',
+                  seatLimit: 25,
+                  currentPeriodEnd: null,
+                },
+              ],
+            ],
+          ],
+        ]),
+      });
+
+      await expect(
+        service.acceptInvite('valid.token', 'user_jane'),
+      ).rejects.toThrow(/seats are taken/);
     });
   });
 
