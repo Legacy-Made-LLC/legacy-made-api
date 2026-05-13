@@ -33,6 +33,7 @@ describe('EntitlementsController', () => {
       currentPeriodEnd: null,
       cancellationPending: false,
     },
+    entitlementSource: 'none',
   };
 
   beforeEach(async () => {

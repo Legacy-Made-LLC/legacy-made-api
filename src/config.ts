@@ -50,6 +50,11 @@ export const configSchema = z.object({
   // INVITATION TOKENS
   INVITATION_TOKEN_SECRET: z.string(),
   INVITATION_BASE_URL: z.url().default('https://app.mylegacymade.com'),
+  // Separate secret for B2B master subscription invites — operational
+  // tokens with a shorter TTL than the personal trusted-contact invites.
+  // Keeping secrets distinct means rotating one doesn't invalidate
+  // outstanding invites of the other type.
+  MASTER_SUB_INVITATION_TOKEN_SECRET: z.string(),
 
   // FILE UPLOAD
   MAX_FILE_SIZE_BYTES: z.coerce
