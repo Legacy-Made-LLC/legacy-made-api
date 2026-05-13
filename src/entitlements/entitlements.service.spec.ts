@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { DbService } from '../db/db.service';
 import { ApiClsService } from '../lib/api-cls.service';
+import { masterSubscriptionMembers, masterSubscriptions } from '../schema';
 import {
   SUBSCRIPTION_GRACE_PERIOD_MS,
   TIER_CONFIG,
@@ -8,6 +9,30 @@ import {
 import { EntitlementException } from './entitlements.exception';
 import { EntitlementsService } from './entitlements.service';
 import { SubscriptionTier } from './entitlements.types';
+
+/**
+ * Build a thenable that doubles as a Drizzle query builder chain — it
+ * resolves to `result` when awaited, but also supports `.orderBy()` and
+ * `.limit()` (which return self) so callers can chain without crashing
+ * the mock.
+ */
+function thenableResult<T>(result: T): any {
+  const obj: any = {
+    orderBy: jest.fn(() => obj),
+    limit: jest.fn(() => obj),
+    then: (onFulfilled: any, onRejected: any) =>
+      Promise.resolve(result).then(onFulfilled, onRejected),
+    catch: (onRejected: any) => Promise.resolve(result).catch(onRejected),
+    finally: (onFinally: any) => Promise.resolve(result).finally(onFinally),
+  };
+  return obj;
+}
+
+type B2BMembershipFixture = {
+  tier: SubscriptionTier;
+  masterSubscriptionId: string;
+  providerName: string;
+};
 
 describe('EntitlementsService', () => {
   let service: EntitlementsService;
@@ -23,18 +48,38 @@ describe('EntitlementsService', () => {
     tierOverride?: SubscriptionTier,
     entryCount = 0,
     currentPeriodEnd: Date | null = null,
-  ) => ({
-    select: jest.fn().mockReturnThis(),
-    from: jest.fn().mockReturnThis(),
-    innerJoin: jest.fn().mockReturnThis(),
-    where: jest
-      .fn()
-      .mockResolvedValue([
-        { tier: tierOverride ?? 'free', count: entryCount, currentPeriodEnd },
-      ]),
-    update: jest.fn().mockReturnThis(),
-    set: jest.fn().mockReturnThis(),
-  });
+    b2bMembership: B2BMembershipFixture | null = null,
+  ) => {
+    let lastFromTable: unknown = null;
+    const builder: any = {
+      select: jest.fn(() => builder),
+      from: jest.fn((tbl: unknown) => {
+        lastFromTable = tbl;
+        return builder;
+      }),
+      innerJoin: jest.fn(() => builder),
+      where: jest.fn(() => {
+        // B2B membership query (resolveEffectiveTier B2B lookup)
+        if (
+          lastFromTable === masterSubscriptionMembers ||
+          lastFromTable === masterSubscriptions
+        ) {
+          return thenableResult(b2bMembership ? [b2bMembership] : []);
+        }
+        // Default: subscription / quota counting / etc.
+        return thenableResult([
+          {
+            tier: tierOverride ?? 'free',
+            count: entryCount,
+            currentPeriodEnd,
+          },
+        ]);
+      }),
+      update: jest.fn(() => builder),
+      set: jest.fn(() => builder),
+    };
+    return builder;
+  };
 
   beforeEach(async () => {
     mockDbService = {
@@ -77,13 +122,21 @@ describe('EntitlementsService', () => {
     });
 
     it('should return free tier when no subscription exists', async () => {
+      // Build a tx that returns empty for every query (no D2C row,
+      // no B2B membership)
+      let lastFromTable: unknown = null;
       mockDbService.rls.mockImplementation((callback) =>
         callback({
           select: jest.fn().mockReturnThis(),
-          from: jest.fn().mockReturnThis(),
-          where: jest.fn().mockResolvedValue([]), // No subscription found
+          from: jest.fn(function (this: any, tbl: unknown) {
+            lastFromTable = tbl;
+            return this;
+          }),
+          innerJoin: jest.fn().mockReturnThis(),
+          where: jest.fn(() => thenableResult([])),
         }),
       );
+      void lastFromTable;
 
       const tier = await service.getTier();
       expect(tier).toBe('free');
@@ -926,6 +979,175 @@ describe('EntitlementsService', () => {
 
       const tier = await service.getTier();
       expect(tier).toBe('lifetime');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // resolveEffectiveTier — the D2C/B2B merge matrix
+  // ---------------------------------------------------------------------------
+
+  describe('resolveEffectiveTier', () => {
+    const futureDate = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+    const b2bIndividual: B2BMembershipFixture = {
+      tier: 'individual',
+      masterSubscriptionId: 'master-sub-1',
+      providerName: 'Acme Estate Planning',
+    };
+    const b2bFamily: B2BMembershipFixture = {
+      tier: 'family',
+      masterSubscriptionId: 'master-sub-1',
+      providerName: 'Acme Estate Planning',
+    };
+
+    it('D2C only active → source=d2c', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('individual', 0, futureDate, null)),
+      );
+
+      const result = await service.resolveEffectiveTier();
+
+      expect(result).toEqual({ tier: 'individual', source: 'd2c' });
+    });
+
+    it('B2B only active → source=b2b with providerName', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx(undefined, 0, null, b2bIndividual)),
+      );
+
+      const result = await service.resolveEffectiveTier();
+
+      expect(result).toEqual({
+        tier: 'individual',
+        source: 'b2b',
+        masterSubscriptionId: 'master-sub-1',
+        providerName: 'Acme Estate Planning',
+      });
+    });
+
+    it('D2C individual + B2B individual → tie goes to B2B', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('individual', 0, futureDate, b2bIndividual)),
+      );
+
+      const result = await service.resolveEffectiveTier();
+
+      expect(result.source).toBe('b2b');
+      expect(result.tier).toBe('individual');
+      expect(result.providerName).toBe('Acme Estate Planning');
+    });
+
+    it('D2C family + B2B individual → D2C wins (higher tier)', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('family', 0, futureDate, b2bIndividual)),
+      );
+
+      const result = await service.resolveEffectiveTier();
+
+      expect(result).toEqual({ tier: 'family', source: 'd2c' });
+    });
+
+    it('D2C individual + B2B family (Phase 2 scenario) → B2B wins', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('individual', 0, futureDate, b2bFamily)),
+      );
+
+      const result = await service.resolveEffectiveTier();
+
+      expect(result.source).toBe('b2b');
+      expect(result.tier).toBe('family');
+    });
+
+    it('B2B-only, master sub lapsed (not returned by query) → falls back to free/none', async () => {
+      // The B2B query already filters out lapsed master subs via the
+      // status='active' and current_period_end >= now() clauses, so the
+      // mock simulates no B2B membership being found.
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx(undefined, 0, null, null)),
+      );
+
+      const result = await service.resolveEffectiveTier();
+
+      expect(result).toEqual({ tier: 'free', source: 'none' });
+    });
+
+    it('B2B lapsed + D2C active → D2C is the fallback', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('individual', 0, futureDate, null)),
+      );
+
+      const result = await service.resolveEffectiveTier();
+
+      expect(result).toEqual({ tier: 'individual', source: 'd2c' });
+    });
+
+    it('Lifetime D2C + B2B family → lifetime always wins, skips B2B', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('lifetime', 0, null, b2bFamily)),
+      );
+
+      const result = await service.resolveEffectiveTier();
+
+      expect(result).toEqual({ tier: 'lifetime', source: 'lifetime' });
+    });
+
+    it('No subscriptions of any kind → source=none', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx(undefined, 0, null, null)),
+      );
+
+      const result = await service.resolveEffectiveTier();
+
+      expect(result).toEqual({ tier: 'free', source: 'none' });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // getEntitlementInfo exposes entitlementSource + providerName to clients
+  // ---------------------------------------------------------------------------
+
+  describe('getEntitlementInfo with B2B source', () => {
+    const futureDate = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+
+    it('includes entitlementSource=b2b and providerName for B2B members', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(
+          createMockTx(undefined, 0, null, {
+            tier: 'individual',
+            masterSubscriptionId: 'master-sub-42',
+            providerName: 'Acme Estate Planning',
+          }),
+        ),
+      );
+
+      const info = await service.getEntitlementInfo();
+
+      expect(info.tier).toBe('individual');
+      expect(info.entitlementSource).toBe('b2b');
+      expect(info.masterSubscriptionId).toBe('master-sub-42');
+      expect(info.providerName).toBe('Acme Estate Planning');
+    });
+
+    it('includes entitlementSource=d2c for paid RC subscribers', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx('individual', 0, futureDate, null)),
+      );
+
+      const info = await service.getEntitlementInfo();
+
+      expect(info.entitlementSource).toBe('d2c');
+      expect(info.masterSubscriptionId).toBeUndefined();
+      expect(info.providerName).toBeUndefined();
+    });
+
+    it('includes entitlementSource=none for free users with no B2B', async () => {
+      mockDbService.rls.mockImplementation((callback) =>
+        callback(createMockTx(undefined, 0, null, null)),
+      );
+
+      const info = await service.getEntitlementInfo();
+
+      expect(info.tier).toBe('free');
+      expect(info.entitlementSource).toBe('none');
     });
   });
 });
