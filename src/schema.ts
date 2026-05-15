@@ -1163,6 +1163,60 @@ export const processedRevenuecatEvents = pgTable(
 // =============================================================================
 
 /**
+ * RLS helpers for the master_subscriptions ↔ master_subscription_members
+ * relationship.
+ *
+ * These two tables cross-reference each other: knowing whether a row in
+ * master_subscriptions is visible to a member requires checking
+ * master_subscription_members, and vice versa. Expressing both checks as
+ * inline `EXISTS (SELECT ... FROM other_table)` inside RLS policies creates
+ * a structural cycle that Postgres rejects at plan time with
+ * `infinite recursion detected in policy for relation ...`.
+ *
+ * The fix is two `SECURITY DEFINER` SQL functions, owned by `neondb_owner`
+ * (which has `BYPASSRLS`). The function bodies query the other table with
+ * elevated privileges so no further policy evaluation is triggered, breaking
+ * the cycle. Functions take a sub_id and return a boolean — they cannot leak
+ * row contents.
+ *
+ * Canonical SQL lives in `migrations/0020_master_sub_rls_security_definer.sql`
+ * (drizzle-kit does not yet emit `CREATE FUNCTION` from schema definitions —
+ * tracked in https://github.com/drizzle-team/drizzle-orm/discussions/2586).
+ * The function bodies in that migration must match the inline reference
+ * below:
+ *
+ *   CREATE OR REPLACE FUNCTION public.current_user_owns_master_sub(sub_id uuid)
+ *     RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+ *     SET search_path = public AS $$
+ *       SELECT EXISTS (
+ *         SELECT 1 FROM master_subscriptions
+ *         WHERE id = sub_id
+ *           AND owner_user_id = current_setting('app.user_id', true)
+ *       )
+ *     $$;
+ *
+ *   CREATE OR REPLACE FUNCTION public.current_user_is_active_member_of(sub_id uuid)
+ *     RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+ *     SET search_path = public AS $$
+ *       SELECT EXISTS (
+ *         SELECT 1 FROM master_subscription_members
+ *         WHERE master_subscription_id = sub_id
+ *           AND user_id = current_setting('app.user_id', true)
+ *           AND status = 'active'
+ *       )
+ *     $$;
+ *
+ * `SET search_path = public` pins the schema resolution so a hostile
+ * search_path cannot shadow the referenced tables — required hygiene for
+ * any SECURITY DEFINER function.
+ */
+const currentUserOwnsMasterSub = (subIdColumn: AnyPgColumn) =>
+  sql`public.current_user_owns_master_sub(${subIdColumn})`;
+
+const currentUserIsActiveMemberOf = (subIdColumn: AnyPgColumn) =>
+  sql`public.current_user_is_active_member_of(${subIdColumn})`;
+
+/**
  * Master subscriptions - per-seat group licenses sold to professionals.
  *
  * Sits alongside the D2C `subscriptions` table; either lane can grant
@@ -1226,14 +1280,7 @@ export const masterSubscriptions = pgTable(
     pgPolicy('master_subscriptions_member_read', {
       for: 'select',
       to: 'public',
-      using: sql`
-        EXISTS (
-          SELECT 1 FROM master_subscription_members
-          WHERE master_subscription_members.master_subscription_id = ${table.id}
-            AND master_subscription_members.user_id = current_setting('app.user_id', true)
-            AND master_subscription_members.status = 'active'
-        )
-      `,
+      using: currentUserIsActiveMemberOf(table.id),
     }),
   ],
 ).enableRLS();
@@ -1303,13 +1350,7 @@ export const masterSubscriptionMembers = pgTable(
     pgPolicy('master_subscription_members_owner_read', {
       for: 'select',
       to: 'public',
-      using: sql`
-        EXISTS (
-          SELECT 1 FROM master_subscriptions
-          WHERE master_subscriptions.id = ${table.masterSubscriptionId}
-            AND master_subscriptions.owner_user_id = current_setting('app.user_id', true)
-        )
-      `,
+      using: currentUserOwnsMasterSub(table.masterSubscriptionId),
     }),
   ],
 ).enableRLS();
