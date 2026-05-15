@@ -57,10 +57,14 @@ export class DbService implements OnModuleInit {
 
     return this.drizzle.transaction(
       async (tx) => {
-        // Set the user ID for RLS policies
-        // Using parameterized query to prevent SQL injection
+        // Set the user ID for RLS policies, and force-clear any leaked
+        // session-level bypass flag. Belt-and-suspenders: without the
+        // second SET, a pooled backend that previously had
+        // app.bypass_rls_status='on' set at the session level (e.g. by
+        // a sloppy ad-hoc diagnostic query) would silently bypass RLS
+        // on this request, exposing other users' rows.
         await tx.execute(
-          sql`SELECT set_config('app.user_id', ${userId}, true)`,
+          sql`SELECT set_config('app.user_id', ${userId}, true), set_config('app.bypass_rls_status', 'off', true)`,
         );
         return callback(tx);
       },

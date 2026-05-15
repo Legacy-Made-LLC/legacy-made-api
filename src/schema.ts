@@ -144,6 +144,10 @@ export const users = pgTable(
     firstName: text('first_name'),
     lastName: text('last_name'),
     avatarUrl: text('avatar_url'),
+    // System admin flag. Gated by SystemAdminGuard at the application layer
+    // (not RLS) — admin endpoints use bypassRls() to operate freely. Set
+    // manually via SQL for trusted operators; no self-service path.
+    isSystemAdmin: boolean('is_system_admin').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -1155,6 +1159,243 @@ export const processedRevenuecatEvents = pgTable(
 ).enableRLS();
 
 // =============================================================================
+// MASTER SUBSCRIPTIONS (B2B)
+// =============================================================================
+
+/**
+ * RLS helpers for the master_subscriptions ↔ master_subscription_members
+ * relationship.
+ *
+ * These two tables cross-reference each other: knowing whether a row in
+ * master_subscriptions is visible to a member requires checking
+ * master_subscription_members, and vice versa. Expressing both checks as
+ * inline `EXISTS (SELECT ... FROM other_table)` inside RLS policies creates
+ * a structural cycle that Postgres rejects at plan time with
+ * `infinite recursion detected in policy for relation ...`.
+ *
+ * The fix is two `SECURITY DEFINER` SQL functions, owned by `neondb_owner`
+ * (which has `BYPASSRLS`). The function bodies query the other table with
+ * elevated privileges so no further policy evaluation is triggered, breaking
+ * the cycle. Functions take a sub_id and return a boolean — they cannot leak
+ * row contents.
+ *
+ * Canonical SQL lives in `migrations/0020_master_sub_rls_security_definer.sql`
+ * (drizzle-kit does not yet emit `CREATE FUNCTION` from schema definitions —
+ * tracked in https://github.com/drizzle-team/drizzle-orm/discussions/2586).
+ * The function bodies in that migration must match the inline reference
+ * below:
+ *
+ *   CREATE OR REPLACE FUNCTION public.current_user_owns_master_sub(sub_id uuid)
+ *     RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+ *     SET search_path = public AS $$
+ *       SELECT EXISTS (
+ *         SELECT 1 FROM master_subscriptions
+ *         WHERE id = sub_id
+ *           AND owner_user_id = current_setting('app.user_id', true)
+ *       )
+ *     $$;
+ *
+ *   CREATE OR REPLACE FUNCTION public.current_user_is_active_member_of(sub_id uuid)
+ *     RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+ *     SET search_path = public AS $$
+ *       SELECT EXISTS (
+ *         SELECT 1 FROM master_subscription_members
+ *         WHERE master_subscription_id = sub_id
+ *           AND user_id = current_setting('app.user_id', true)
+ *           AND status = 'active'
+ *       )
+ *     $$;
+ *
+ * `SET search_path = public` pins the schema resolution so a hostile
+ * search_path cannot shadow the referenced tables — required hygiene for
+ * any SECURITY DEFINER function.
+ */
+const currentUserOwnsMasterSub = (subIdColumn: AnyPgColumn) =>
+  sql`public.current_user_owns_master_sub(${subIdColumn})`;
+
+const currentUserIsActiveMemberOf = (subIdColumn: AnyPgColumn) =>
+  sql`public.current_user_is_active_member_of(${subIdColumn})`;
+
+/**
+ * Master subscriptions - per-seat group licenses sold to professionals.
+ *
+ * Sits alongside the D2C `subscriptions` table; either lane can grant
+ * entitlements. Billing is manual until Phase 2 wires up Stripe webhooks.
+ *
+ * RLS: owners can SELECT their own row; active members can SELECT the
+ * master sub they belong to (so the app can render "provided by [name]").
+ * All writes go through `bypassRls()` from admin-guarded endpoints.
+ */
+export const masterSubscriptions = pgTable(
+  'master_subscriptions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    ownerUserId: text('owner_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    ownerConsumesSeat: boolean('owner_consumes_seat').notNull().default(true),
+    displayName: text('display_name').notNull(),
+    // What tier members get. Locked to 'individual' for MVP per the plan,
+    // but stored as text so Phase 2 can promote without a migration.
+    tier: text('tier').notNull().default('individual'),
+    seatLimit: integer('seat_limit').notNull(),
+    status: text('status').notNull().default('active'),
+    billingProvider: text('billing_provider')
+      .notNull()
+      .default('stripe_manual'),
+    stripeSubscriptionId: text('stripe_subscription_id'),
+    currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
+    createdBy: text('created_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index('master_subscriptions_owner_user_id_idx').on(table.ownerUserId),
+    index('master_subscriptions_status_idx').on(table.status),
+    index('master_subscriptions_current_period_end_idx').on(
+      table.currentPeriodEnd,
+    ),
+    check(
+      'master_subscriptions_status_check',
+      sql`${table.status} IN ('active', 'past_due', 'suspended', 'cancelled')`,
+    ),
+    check(
+      'master_subscriptions_billing_provider_check',
+      sql`${table.billingProvider} IN ('stripe_manual', 'stripe')`,
+    ),
+    check('master_subscriptions_seat_limit_check', sql`${table.seatLimit} > 0`),
+    shouldBypassRlsPolicy(),
+    pgPolicy('master_subscriptions_owner_read', {
+      for: 'select',
+      to: 'public',
+      using: sql`${table.ownerUserId} = current_setting('app.user_id', true)`,
+    }),
+    pgPolicy('master_subscriptions_member_read', {
+      for: 'select',
+      to: 'public',
+      using: currentUserIsActiveMemberOf(table.id),
+    }),
+  ],
+).enableRLS();
+
+/**
+ * Master subscription members - per-seat membership rows.
+ *
+ * One row per seat. Email-locked: the invitation token carries the invitee's
+ * email and only that email can accept. `user_id` is NULL while
+ * status = 'pending_invite' and is set when the invitation is accepted.
+ *
+ * The partial unique index allows re-invitation after removal (because the
+ * old `removed` row is excluded from the uniqueness check).
+ *
+ * RLS: members read only their own row; owners read all members of subs
+ * they own. Writes go through bypassRls.
+ */
+export const masterSubscriptionMembers = pgTable(
+  'master_subscription_members',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    masterSubscriptionId: uuid('master_subscription_id')
+      .notNull()
+      .references(() => masterSubscriptions.id, { onDelete: 'cascade' }),
+    userId: text('user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    invitedEmail: text('invited_email').notNull(),
+    status: text('status').notNull().default('pending_invite'),
+    invitedAt: timestamp('invited_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    joinedAt: timestamp('joined_at', { withTimezone: true }),
+    removedAt: timestamp('removed_at', { withTimezone: true }),
+    removedBy: text('removed_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('master_subscription_members_sub_email_active_uniq')
+      .on(table.masterSubscriptionId, table.invitedEmail)
+      .where(sql`status <> 'removed'`),
+    index('master_subscription_members_master_sub_id_idx').on(
+      table.masterSubscriptionId,
+    ),
+    index('master_subscription_members_user_id_idx').on(table.userId),
+    index('master_subscription_members_invited_email_idx').on(
+      table.invitedEmail,
+    ),
+    check(
+      'master_subscription_members_status_check',
+      sql`${table.status} IN ('pending_invite', 'active', 'removed')`,
+    ),
+    shouldBypassRlsPolicy(),
+    pgPolicy('master_subscription_members_self_read', {
+      for: 'select',
+      to: 'public',
+      using: sql`${table.userId} = current_setting('app.user_id', true)`,
+    }),
+    pgPolicy('master_subscription_members_owner_read', {
+      for: 'select',
+      to: 'public',
+      using: currentUserOwnsMasterSub(table.masterSubscriptionId),
+    }),
+  ],
+).enableRLS();
+
+/**
+ * Master subscription audit log - append-only mutation record.
+ *
+ * One row per administrative action (create, invite, accept, remove, status
+ * change, seat change, period-end change, lapse). `actor_user_id` is NULL
+ * for system actions like the daily lapse cron. Accessed only via bypassRls.
+ */
+export const masterSubscriptionAuditLog = pgTable(
+  'master_subscription_audit_log',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    masterSubscriptionId: uuid('master_subscription_id')
+      .notNull()
+      .references(() => masterSubscriptions.id, { onDelete: 'cascade' }),
+    actorUserId: text('actor_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    action: text('action').notNull(),
+    targetMemberId: uuid('target_member_id').references(
+      () => masterSubscriptionMembers.id,
+      { onDelete: 'set null' },
+    ),
+    metadata: jsonb('metadata').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index('master_subscription_audit_log_master_sub_id_idx').on(
+      table.masterSubscriptionId,
+    ),
+    index('master_subscription_audit_log_created_at_idx').on(table.createdAt),
+    check(
+      'master_subscription_audit_log_action_check',
+      sql`${table.action} IN ('created', 'invited', 'invite_accepted', 'member_removed', 'status_changed', 'seats_changed', 'period_end_changed', 'lapsed')`,
+    ),
+    shouldBypassRlsPolicy(),
+  ],
+).enableRLS();
+
+// =============================================================================
 // TYPE EXPORTS
 // =============================================================================
 
@@ -1208,6 +1449,19 @@ export type NewUserPreference = typeof userPreferences.$inferInsert;
 
 export type NotificationLogEntry = typeof notificationLog.$inferSelect;
 export type NewNotificationLogEntry = typeof notificationLog.$inferInsert;
+
+export type MasterSubscription = typeof masterSubscriptions.$inferSelect;
+export type NewMasterSubscription = typeof masterSubscriptions.$inferInsert;
+
+export type MasterSubscriptionMember =
+  typeof masterSubscriptionMembers.$inferSelect;
+export type NewMasterSubscriptionMember =
+  typeof masterSubscriptionMembers.$inferInsert;
+
+export type MasterSubscriptionAuditLogEntry =
+  typeof masterSubscriptionAuditLog.$inferSelect;
+export type NewMasterSubscriptionAuditLogEntry =
+  typeof masterSubscriptionAuditLog.$inferInsert;
 
 export type ProcessedRevenuecatEvent =
   typeof processedRevenuecatEvents.$inferSelect;

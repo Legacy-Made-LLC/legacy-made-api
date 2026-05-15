@@ -1,10 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { and, count, eq, ne, sum } from 'drizzle-orm';
+import { and, count, eq, gte, isNull, ne, or, sql, sum } from 'drizzle-orm';
 import { DbService, DrizzleTransaction } from '../db/db.service';
 import { ApiClsService } from '../lib/api-cls.service';
 import {
   entries,
   files,
+  masterSubscriptionMembers,
+  masterSubscriptions,
   messages,
   plans,
   subscriptions,
@@ -21,6 +23,7 @@ import {
 } from './entitlements.config';
 import { EntitlementException } from './entitlements.exception';
 import {
+  EffectiveTier,
   EntitlementInfo,
   EntitlementResult,
   Pillar,
@@ -28,6 +31,18 @@ import {
   SubscriptionStatus,
   SubscriptionTier,
 } from './entitlements.types';
+
+/**
+ * Tier ordering for effective-tier resolution. Higher number wins when
+ * comparing D2C and B2B. Ties go to B2B (so a member with a redundant
+ * D2C sub correctly reports source='b2b').
+ */
+const TIER_RANK: Record<SubscriptionTier, number> = {
+  free: 0,
+  individual: 1,
+  family: 2,
+  lifetime: 3,
+};
 
 @Injectable()
 export class EntitlementsService {
@@ -183,38 +198,175 @@ export class EntitlementsService {
   }
 
   /**
-   * Get tier within an existing transaction.
-   * Checks for subscription expiration and returns 'free' if expired.
+   * Get effective tier within an existing transaction. Combines D2C (RC)
+   * and B2B (master subscription) sources via {@link resolveEffectiveTierInTx}
+   * and returns just the tier. Internal callers (pillar checks, quota
+   * checks) use this; callers that need the source/provider info should
+   * call {@link resolveEffectiveTier} directly.
    *
-   * When planOwnerId is set in CLS (trusted contact context), this checks the
-   * plan OWNER's tier via a separate bypassRls transaction.
+   * When planOwnerId is set in CLS (trusted contact context), checks the
+   * plan OWNER's effective tier via a separate bypassRls transaction.
    */
   async getTierInTx(tx: DrizzleTransaction): Promise<SubscriptionTier> {
     return this.withEntitlementTx(tx, async (effectiveTx, userId) => {
-      const [subscription] = await effectiveTx
-        .select({
-          tier: subscriptions.tier,
-          currentPeriodEnd: subscriptions.currentPeriodEnd,
-          status: subscriptions.status,
-        })
-        .from(subscriptions)
-        .where(eq(subscriptions.userId, userId));
-
-      if (!subscription) {
-        return 'free';
-      }
-
-      const tier = subscription.tier as SubscriptionTier;
-      const status = subscription.status as SubscriptionStatus | null;
-
-      if (
-        this.isSubscriptionExpired(tier, subscription.currentPeriodEnd, status)
-      ) {
-        return 'free';
-      }
-
-      return tier;
+      const effective = await this.resolveEffectiveTierInTx(
+        effectiveTx,
+        userId,
+      );
+      return effective.tier;
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Effective tier resolution (D2C + B2B)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Resolve the effective subscription tier for the current context.
+   *
+   * Combines D2C (RevenueCat) and B2B (master subscription membership)
+   * sources by picking the highest tier. Ties go to B2B so a member with
+   * a redundant D2C sub reports source='b2b' — the mobile app uses this
+   * to hide the "Manage Subscription" / paywall affordances (the B2B
+   * member's bill is the master sub owner's problem, not theirs).
+   *
+   * Lifetime always wins and short-circuits the B2B lookup.
+   */
+  async resolveEffectiveTier(): Promise<EffectiveTier> {
+    return this.db.rls(async (tx) => {
+      return this.withEntitlementTx(tx, async (effectiveTx, userId) =>
+        this.resolveEffectiveTierInTx(effectiveTx, userId),
+      );
+    });
+  }
+
+  /**
+   * Resolve effective tier for a specific user inside an existing tx.
+   * Does not consult CLS — pass the user ID explicitly. Callers in trusted-
+   * contact context should resolve the plan-owner ID first.
+   */
+  async resolveEffectiveTierInTx(
+    tx: DrizzleTransaction,
+    userId: string,
+  ): Promise<EffectiveTier> {
+    const d2c = await this.getD2CTierInTx(tx, userId);
+
+    // Lifetime always wins — skip the B2B query
+    if (d2c === 'lifetime') {
+      return { tier: 'lifetime', source: 'lifetime' };
+    }
+
+    const b2b = await this.getB2BTierInTx(tx, userId);
+
+    if (!b2b) {
+      return d2c === 'free'
+        ? { tier: 'free', source: 'none' }
+        : { tier: d2c, source: 'd2c' };
+    }
+
+    // Ties go to B2B (see method docstring for rationale)
+    if (TIER_RANK[b2b.tier] >= TIER_RANK[d2c]) {
+      return {
+        tier: b2b.tier,
+        source: 'b2b',
+        masterSubscriptionId: b2b.masterSubscriptionId,
+        providerName: b2b.providerName,
+      };
+    }
+    return { tier: d2c, source: 'd2c' };
+  }
+
+  /**
+   * Read the user's D2C tier from the `subscriptions` table, applying
+   * expiration rules. Returns 'free' if no row, expired, or status='expired'.
+   */
+  private async getD2CTierInTx(
+    tx: DrizzleTransaction,
+    userId: string,
+  ): Promise<SubscriptionTier> {
+    const [subscription] = await tx
+      .select({
+        tier: subscriptions.tier,
+        currentPeriodEnd: subscriptions.currentPeriodEnd,
+        status: subscriptions.status,
+      })
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, userId));
+
+    if (!subscription) return 'free';
+
+    const tier = subscription.tier as SubscriptionTier;
+    const status = subscription.status as SubscriptionStatus | null;
+
+    if (
+      this.isSubscriptionExpired(tier, subscription.currentPeriodEnd, status)
+    ) {
+      return 'free';
+    }
+    return tier;
+  }
+
+  /**
+   * Read the user's highest-tier active B2B membership. Returns null if
+   * they're not an active member of any active master subscription, or
+   * if the master sub has lapsed (current_period_end < now).
+   */
+  private async getB2BTierInTx(
+    tx: DrizzleTransaction,
+    userId: string,
+  ): Promise<{
+    tier: SubscriptionTier;
+    masterSubscriptionId: string;
+    providerName: string;
+  } | null> {
+    const now = new Date();
+    const [row] = await tx
+      .select({
+        tier: masterSubscriptions.tier,
+        masterSubscriptionId: masterSubscriptions.id,
+        providerName: masterSubscriptions.displayName,
+      })
+      .from(masterSubscriptionMembers)
+      .innerJoin(
+        masterSubscriptions,
+        eq(
+          masterSubscriptions.id,
+          masterSubscriptionMembers.masterSubscriptionId,
+        ),
+      )
+      .where(
+        and(
+          eq(masterSubscriptionMembers.userId, userId),
+          eq(masterSubscriptionMembers.status, 'active'),
+          eq(masterSubscriptions.status, 'active'),
+          or(
+            isNull(masterSubscriptions.currentPeriodEnd),
+            gte(masterSubscriptions.currentPeriodEnd, now),
+          ),
+        ),
+      )
+      // Rank by semantic tier strength, not lexical sort. Locked to
+      // 'individual' for MVP so this is a no-op today, but Phase 2's
+      // family-tier subs would mis-rank under `ORDER BY tier DESC`
+      // (lexically 'individual' > 'family'). Lifetime would never appear
+      // here — it's a D2C-only grant — but we include it for completeness
+      // in case of future master sub product changes.
+      .orderBy(
+        sql`CASE ${masterSubscriptions.tier}
+              WHEN 'lifetime' THEN 3
+              WHEN 'family' THEN 2
+              WHEN 'individual' THEN 1
+              ELSE 0
+            END DESC`,
+      )
+      .limit(1);
+
+    if (!row) return null;
+    return {
+      tier: row.tier as SubscriptionTier,
+      masterSubscriptionId: row.masterSubscriptionId,
+      providerName: row.providerName,
+    };
   }
 
   /**
@@ -613,6 +765,9 @@ export class EntitlementsService {
     const buildInfo = async (
       tx: DrizzleTransaction,
     ): Promise<EntitlementInfo> => {
+      // Fetch the D2C subscription row once — we need its lifecycle metadata
+      // (status, cancellationPending) for the `subscription` field regardless
+      // of whether the effective tier ends up coming from D2C or B2B.
       const [subscription] = await tx
         .select({
           tier: subscriptions.tier,
@@ -623,19 +778,11 @@ export class EntitlementsService {
         .from(subscriptions)
         .where(eq(subscriptions.userId, userId));
 
-      let tier: SubscriptionTier = 'free';
-      const status = (subscription?.status ??
+      const rcStatus = (subscription?.status ??
         null) as SubscriptionStatus | null;
-      if (subscription) {
-        const rawTier = subscription.tier as SubscriptionTier;
-        tier = this.isSubscriptionExpired(
-          rawTier,
-          subscription.currentPeriodEnd,
-          status,
-        )
-          ? 'free'
-          : rawTier;
-      }
+
+      const effective = await this.resolveEffectiveTierInTx(tx, userId);
+      const tier = effective.tier;
 
       const config = TIER_CONFIG[tier];
 
@@ -661,11 +808,14 @@ export class EntitlementsService {
         viewOnlyPillars: config.viewOnlyPillars,
         quotas,
         subscription: {
-          status,
+          status: rcStatus,
           currentPeriodEnd:
             subscription?.currentPeriodEnd?.toISOString() ?? null,
           cancellationPending: subscription?.unsubscribeDetectedAt != null,
         },
+        entitlementSource: effective.source,
+        masterSubscriptionId: effective.masterSubscriptionId,
+        providerName: effective.providerName,
       };
     };
 
