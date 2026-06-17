@@ -2,6 +2,25 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Local secrets (Infisical)
+
+Local dev secrets come from a self-hosted Infisical vault (project `legacy-made-api`), not a committed `.env`. Run with secrets injected:
+
+```bash
+infisical init                                # one-time per checkout/worktree; writes the gitignored .infisical.json
+infisical run --env=dev -- npm run start:dev  # secrets injected as env vars
+```
+
+**Headless agents** (Claude Code and other non-interactive automation) must not use `infisical init` / `infisical login` / bare `infisical run` here — they need an interactive login and fail with "no agent identity". Use the machine-identity wrapper instead:
+
+```bash
+infisical-agent run --env=dev -- npm run start:dev
+```
+
+`infisical-agent` authenticates as the `finn-automation` machine identity and auto-resolves this repo's project (see the `infisical` skill). The interactive commands above remain the human path.
+
+`.infisical.json` is **gitignored** (instance-specific workspace id). Each worktree runs `infisical init` once — beats copying the `.env`. The two multi-line Clerk JWT public keys (`CLERK_JWT_KEY`, `CLERK_JWT_KEY_DEV`) are stored intact (PEM with real newlines) and inject correctly. Regenerate a local `.env` if needed: `infisical export --env=dev --format=dotenv > .env`. Production/CI unchanged.
+
 ## Commands
 
 ```bash
@@ -112,28 +131,28 @@ Most endpoints accepting a JSON request body should use DTO validation. Modules 
 
 **This project uses Zod v4.** Use the current top-level APIs — the old `z.string().xxx()` format validators are deprecated:
 
-| Deprecated (v3) | Use instead (v4) |
-|---|---|
-| `z.string().uuid()` | `z.uuid()` (strict RFC 9562) or `z.guid()` (permissive) |
-| `z.string().email()` | `z.email()` |
-| `z.string().url()` | `z.url()` |
-| `z.string().datetime()` | `z.iso.datetime()` |
-| `z.string().date()` | `z.iso.date()` |
-| `z.string().time()` | `z.iso.time()` |
-| `z.string().duration()` | `z.iso.duration()` |
-| `z.string().ip()` | `z.ipv4()` or `z.ipv6()` |
-| `z.string().base64()` | `z.base64()` |
-| `z.string().emoji()` | `z.emoji()` |
-| `z.string().nanoid()` | `z.nanoid()` |
-| `z.string().cuid()` | `z.cuid()` |
-| `z.string().cuid2()` | `z.cuid2()` |
-| `z.string().ulid()` | `z.ulid()` |
-| `z.nativeEnum(Enum)` | `z.enum(Enum)` |
-| `z.object({}).strict()` | `z.strictObject({})` |
-| `z.object({}).passthrough()` | `z.looseObject({})` |
-| `A.merge(B)` | `A.extend(B.shape)` |
-| `{ message: "..." }` (in `.min()`, etc.) | `{ error: "..." }` |
-| `z.record(valueSchema)` (single arg) | `z.record(z.string(), valueSchema)` |
+| Deprecated (v3)                          | Use instead (v4)                                        |
+| ---------------------------------------- | ------------------------------------------------------- |
+| `z.string().uuid()`                      | `z.uuid()` (strict RFC 9562) or `z.guid()` (permissive) |
+| `z.string().email()`                     | `z.email()`                                             |
+| `z.string().url()`                       | `z.url()`                                               |
+| `z.string().datetime()`                  | `z.iso.datetime()`                                      |
+| `z.string().date()`                      | `z.iso.date()`                                          |
+| `z.string().time()`                      | `z.iso.time()`                                          |
+| `z.string().duration()`                  | `z.iso.duration()`                                      |
+| `z.string().ip()`                        | `z.ipv4()` or `z.ipv6()`                                |
+| `z.string().base64()`                    | `z.base64()`                                            |
+| `z.string().emoji()`                     | `z.emoji()`                                             |
+| `z.string().nanoid()`                    | `z.nanoid()`                                            |
+| `z.string().cuid()`                      | `z.cuid()`                                              |
+| `z.string().cuid2()`                     | `z.cuid2()`                                             |
+| `z.string().ulid()`                      | `z.ulid()`                                              |
+| `z.nativeEnum(Enum)`                     | `z.enum(Enum)`                                          |
+| `z.object({}).strict()`                  | `z.strictObject({})`                                    |
+| `z.object({}).passthrough()`             | `z.looseObject({})`                                     |
+| `A.merge(B)`                             | `A.extend(B.shape)`                                     |
+| `{ message: "..." }` (in `.min()`, etc.) | `{ error: "..." }`                                      |
+| `z.record(valueSchema)` (single arg)     | `z.record(z.string(), valueSchema)`                     |
 
 Non-format string methods (`.min()`, `.max()`, `.length()`, `.regex()`, `.includes()`, `.startsWith()`, `.endsWith()`, `.trim()`) remain unchanged and are fine to use on `z.string()`.
 
