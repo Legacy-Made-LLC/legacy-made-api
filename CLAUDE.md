@@ -11,6 +11,14 @@ infisical init                                # one-time per checkout/worktree; 
 infisical run --env=dev -- npm run start:dev  # secrets injected as env vars
 ```
 
+**Headless agents** (Claude Code and other non-interactive automation) must not use `infisical init` / `infisical login` / bare `infisical run` here — they need an interactive login and fail with "no agent identity". Use the machine-identity wrapper instead:
+
+```bash
+infisical-agent run --env=dev -- npm run start:dev
+```
+
+`infisical-agent` authenticates as the `finn-automation` machine identity and auto-resolves this repo's project (see the `infisical` skill). The interactive commands above remain the human path.
+
 `.infisical.json` is **gitignored** (instance-specific workspace id). Each worktree runs `infisical init` once — beats copying the `.env`. The two multi-line Clerk JWT public keys (`CLERK_JWT_KEY`, `CLERK_JWT_KEY_DEV`) are stored intact (PEM with real newlines) and inject correctly. Regenerate a local `.env` if needed: `infisical export --env=dev --format=dotenv > .env`. Production/CI unchanged.
 
 ## Commands
