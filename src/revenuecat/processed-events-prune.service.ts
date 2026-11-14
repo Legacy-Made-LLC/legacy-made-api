@@ -29,7 +29,7 @@ export class ProcessedEventsPruneService {
         {
           msg: 'processed_revenuecat_events_prune_failed',
         },
-        err instanceof Error ? err.stack : undefined,
+        err,
       );
     }
   }

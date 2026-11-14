@@ -8,7 +8,8 @@ export const configSchema = z.object({
     .default('development'),
 
   // SENTRY (read directly by src/instrument.ts; unset disables reporting)
-  SENTRY_DSN: z.url().optional(),
+  // An empty value means "off", as it does for the SDK.
+  SENTRY_DSN: z.union([z.url(), z.literal('')]).optional(),
 
   // DATABASE
   DATABASE_URL_APP: z.string(),

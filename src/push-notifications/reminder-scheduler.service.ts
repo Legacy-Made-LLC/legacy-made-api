@@ -62,7 +62,8 @@ export class ReminderSchedulerService {
       }
     } catch (error) {
       this.logger.error('Failed to query eligible reminder users', error);
-      return;
+      // Rethrow so the Sentry cron monitor records this run as failed.
+      throw error;
     }
 
     this.logger.log(

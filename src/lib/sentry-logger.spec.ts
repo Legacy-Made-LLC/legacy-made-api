@@ -1,6 +1,6 @@
 import * as Sentry from '@sentry/nestjs';
 import { captureLoggedError } from './sentry-logger';
-import { redactEmails } from './sentry-redaction';
+import { redactEvent, redactText } from './sentry-redaction';
 
 /**
  * Runs the real Sentry SDK against an in-memory transport and returns the
@@ -12,7 +12,7 @@ function collectEvents(): Sentry.ErrorEvent[] {
     dsn: 'https://public@sentry.invalid/1',
     defaultIntegrations: false,
     beforeSend: (event) => {
-      events.push(redactEmails(event));
+      events.push(redactEvent(event));
       return null;
     },
   });
@@ -74,10 +74,48 @@ describe('captureLoggedError', () => {
     expect(events[0].extra?.durationMs).toBe(3);
   });
 
+  it('does not take a trailing stack string as the logger context', async () => {
+    captureLoggedError('Unknown failure', ['Error: x\n    at foo (a.ts:1:1)']);
+    await Sentry.flush();
+
+    expect(events).toHaveLength(1);
+    expect(events[0].tags?.logger).toBeUndefined();
+  });
+
+  it('sends fatal logs at fatal level', async () => {
+    captureLoggedError('Process cannot continue', ['Main'], 'fatal');
+    await Sentry.flush();
+
+    expect(events[0].level).toBe('fatal');
+  });
+
   it('skips errors the global filter already reported', async () => {
-    captureLoggedError('boom', ['stack', 'ExceptionsHandler']);
+    // BaseExceptionFilter logs `(message, undefined, 'ExceptionsHandler')`.
+    captureLoggedError('boom', [undefined, 'ExceptionsHandler']);
     await Sentry.flush();
 
     expect(events).toHaveLength(0);
+  });
+});
+
+describe('redactText', () => {
+  it.each([
+    [
+      'Failed query: insert into "entries" ("title") values ($1)\nparams: Mom\'s will',
+      'Failed query: insert into "entries" ("title") values ($1)\nparams: [redacted]',
+    ],
+    ['GET /files/share/abc123?x=1', 'GET /files/share/[token]?x=1'],
+    [
+      '/access-invitations/eyJhbGc.x.y/accept',
+      '/access-invitations/[token]/accept',
+    ],
+    [
+      'DeviceNotRegistered: "ExponentPushToken[xxxx]" is not registered',
+      'DeviceNotRegistered: "ExpoPushToken[redacted]" is not registered',
+    ],
+    ['email=jane%40example.com', 'email=[email]'],
+    ['to jane.doe+1@example.co.uk', 'to [email]'],
+  ])('redacts %j', (input, expected) => {
+    expect(redactText(input)).toBe(expected);
   });
 });

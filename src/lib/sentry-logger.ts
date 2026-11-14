@@ -19,6 +19,11 @@ export class SentryLogger extends ConsoleLogger {
     super.error(message, ...optionalParams);
     captureLoggedError(message, optionalParams);
   }
+
+  fatal(message: unknown, ...optionalParams: unknown[]): void {
+    super.fatal(message, ...optionalParams);
+    captureLoggedError(message, optionalParams, 'fatal');
+  }
 }
 
 /**
@@ -32,13 +37,17 @@ export class SentryLogger extends ConsoleLogger {
  * @param message - the first argument to `logger.error`
  * @param optionalParams - the remaining arguments; a `Logger` instance appends
  *   its context name as the last one
+ * @param level - Sentry level for message-only events
  */
 export function captureLoggedError(
   message: unknown,
   optionalParams: unknown[],
+  level: 'error' | 'fatal' = 'error',
 ): void {
+  // A trailing stack string (static `Logger.error(msg, stack)`) is not a context.
   const last = optionalParams.at(-1);
-  const context = typeof last === 'string' ? last : undefined;
+  const context =
+    typeof last === 'string' && !last.includes('\n') ? last : undefined;
   if (context && ALREADY_CAPTURED_CONTEXTS.has(context)) {
     return;
   }
@@ -49,6 +58,7 @@ export function captureLoggedError(
       : optionalParams.find((param) => param instanceof Error);
 
   Sentry.withScope((scope) => {
+    scope.setLevel(level);
     if (context) {
       scope.setTag('logger', context);
     }
@@ -64,7 +74,7 @@ export function captureLoggedError(
     if (isPlainObject(message)) {
       scope.setExtras(message);
     }
-    Sentry.captureMessage(describe(message), 'error');
+    Sentry.captureMessage(describe(message), level);
   });
 }
 
