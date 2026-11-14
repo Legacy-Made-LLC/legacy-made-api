@@ -84,7 +84,10 @@ describe('PushNotificationsService', () => {
   // =========================================================================
 
   describe('sendToUser', () => {
+    /** One fake transaction for every bypassRls call; returns its spies. */
     function mockTokensForUser(tokens: string[]) {
+      const deleteWhere = jest.fn().mockResolvedValue([]);
+      const insertValues = jest.fn().mockResolvedValue([]);
       mockDbService.bypassRls.mockImplementation(async (cb) => {
         const tx = {
           select: jest.fn().mockReturnValue({
@@ -94,22 +97,26 @@ describe('PushNotificationsService', () => {
                 .mockResolvedValue(tokens.map((t) => ({ token: t }))),
             }),
           }),
-          delete: jest.fn().mockReturnValue({
-            where: jest.fn().mockResolvedValue([]),
-          }),
+          delete: jest.fn().mockReturnValue({ where: deleteWhere }),
+          insert: jest.fn().mockReturnValue({ values: insertValues }),
         };
         return cb(tx);
       });
+      return { deleteWhere, insertValues };
     }
 
     it('should send notification to all devices', async () => {
       mockTokensForUser(['ExponentPushToken[abc]', 'ExponentPushToken[def]']);
       mockSendPushNotificationsAsync.mockResolvedValue([
-        { status: 'ok' },
-        { status: 'ok' },
+        { status: 'ok', id: 'ticket-1' },
+        { status: 'ok', id: 'ticket-2' },
       ]);
 
-      await service.sendToUser('user-1', 'Title', 'Body', { key: 'value' });
+      const result = await service.sendToUser('user-1', 'Title', 'Body', {
+        key: 'value',
+      });
+
+      expect(result).toEqual({ tokens: 2, accepted: 2 });
 
       expect(mockSendPushNotificationsAsync).toHaveBeenCalledTimes(1);
       const sentMessages = mockChunkPushNotifications.mock.calls[0][0];
@@ -126,8 +133,9 @@ describe('PushNotificationsService', () => {
     it('should not send when user has no tokens', async () => {
       mockTokensForUser([]);
 
-      await service.sendToUser('user-1', 'Title', 'Body');
+      const result = await service.sendToUser('user-1', 'Title', 'Body');
 
+      expect(result).toEqual({ tokens: 0, accepted: 0 });
       expect(mockSendPushNotificationsAsync).not.toHaveBeenCalled();
     });
 
@@ -137,7 +145,9 @@ describe('PushNotificationsService', () => {
       mockIsExpoPushToken.mockImplementation(
         (t: string) => t === 'valid-token',
       );
-      mockSendPushNotificationsAsync.mockResolvedValue([{ status: 'ok' }]);
+      mockSendPushNotificationsAsync.mockResolvedValue([
+        { status: 'ok', id: 'ticket-1' },
+      ]);
 
       await service.sendToUser('user-1', 'Title', 'Body');
 
@@ -147,10 +157,13 @@ describe('PushNotificationsService', () => {
       expect(sentMessages[0].to).toBe('valid-token');
     });
 
-    it('should remove stale DeviceNotRegistered tokens', async () => {
-      mockTokensForUser(['token-1', 'token-2']);
+    it('should remove stale DeviceNotRegistered tokens and store accepted tickets', async () => {
+      const { deleteWhere, insertValues } = mockTokensForUser([
+        'token-1',
+        'token-2',
+      ]);
       mockSendPushNotificationsAsync.mockResolvedValue([
-        { status: 'ok' },
+        { status: 'ok', id: 'ticket-1' },
         {
           status: 'error',
           details: { error: 'DeviceNotRegistered' },
@@ -158,42 +171,29 @@ describe('PushNotificationsService', () => {
         },
       ]);
 
-      // Track bypassRls calls - first for getTokensForUser, second for removeStaleTokens
-      let bypassCallCount = 0;
-      mockDbService.bypassRls.mockImplementation(async (cb) => {
-        bypassCallCount++;
-        if (bypassCallCount === 1) {
-          // getTokensForUser
-          const tx = {
-            select: jest.fn().mockReturnValue({
-              from: jest.fn().mockReturnValue({
-                where: jest
-                  .fn()
-                  .mockResolvedValue([
-                    { token: 'token-1' },
-                    { token: 'token-2' },
-                  ]),
-              }),
-            }),
-          };
-          return cb(tx);
-        }
-        // removeStaleTokens
-        const tx = {
-          delete: jest.fn().mockReturnValue({
-            where: jest.fn().mockResolvedValue([]),
-          }),
-        };
-        return cb(tx);
-      });
+      const result = await service.sendToUser('user-1', 'Title', 'Body');
 
-      await service.sendToUser('user-1', 'Title', 'Body');
+      expect(result).toEqual({ tokens: 2, accepted: 1 });
+      expect(deleteWhere).toHaveBeenCalledTimes(1);
+      expect(insertValues).toHaveBeenCalledWith([
+        { ticketId: 'ticket-1', userId: 'user-1', token: 'token-1' },
+      ]);
+    });
 
-      // Wait for fire-and-forget cleanup
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    it('should report zero accepted when every device is rejected', async () => {
+      const { insertValues } = mockTokensForUser(['token-1']);
+      mockSendPushNotificationsAsync.mockResolvedValue([
+        {
+          status: 'error',
+          details: { error: 'DeviceNotRegistered' },
+          message: 'Device not registered',
+        },
+      ]);
 
-      // Should have called bypassRls a second time for cleanup
-      expect(bypassCallCount).toBe(2);
+      const result = await service.sendToUser('user-1', 'Title', 'Body');
+
+      expect(result).toEqual({ tokens: 1, accepted: 0 });
+      expect(insertValues).not.toHaveBeenCalled();
     });
 
     it('should throw when Expo SDK fails', async () => {
@@ -233,14 +233,18 @@ describe('PushNotificationsService', () => {
         platform: 'ios',
       };
 
-      mockDbService.rls.mockImplementation(async (cb) => {
+      const onConflictDoUpdate = jest.fn().mockReturnValue({
+        returning: jest.fn().mockResolvedValue([mockToken]),
+      });
+      mockDbService.bypassRls.mockImplementation(async (cb) => {
         const tx = {
-          insert: jest.fn().mockReturnValue({
-            values: jest.fn().mockReturnValue({
-              onConflictDoUpdate: jest.fn().mockReturnValue({
-                returning: jest.fn().mockResolvedValue([mockToken]),
-              }),
+          select: jest.fn().mockReturnValue({
+            from: jest.fn().mockReturnValue({
+              where: jest.fn().mockResolvedValue([{ userId: 'previous-user' }]),
             }),
+          }),
+          insert: jest.fn().mockReturnValue({
+            values: jest.fn().mockReturnValue({ onConflictDoUpdate }),
           }),
         };
         return cb(tx);
@@ -252,6 +256,8 @@ describe('PushNotificationsService', () => {
       } as any);
 
       expect(result).toEqual(mockToken);
+      // A token held by another account moves to the signed-in user
+      expect(onConflictDoUpdate.mock.calls[0][0].set.userId).toBe('user-123');
     });
   });
 

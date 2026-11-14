@@ -1131,6 +1131,33 @@ export const notificationLog = pgTable(
 ).enableRLS();
 
 /**
+ * Push tickets - Expo tickets awaiting a delivery receipt
+ *
+ * One row per message Expo accepted. Expo only reports most delivery failures
+ * (dead device tokens, bad Apple/FCM credentials) in a receipt fetched after
+ * the send, so the receipt job reads these rows ~15 minutes later, acts on the
+ * receipt, and deletes the row. Expo keeps receipts for 24 hours; older rows
+ * are dropped. Only accessed via bypassRls.
+ */
+export const pushTickets = pgTable(
+  'push_tickets',
+  {
+    ticketId: text('ticket_id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index('push_tickets_created_at_idx').on(table.createdAt),
+    shouldBypassRlsPolicy(),
+  ],
+).enableRLS();
+
+/**
  * Processed RevenueCat events - webhook replay dedupe log
  *
  * Append-only. One row per RevenueCat webhook event we've processed,
@@ -1208,6 +1235,9 @@ export type NewUserPreference = typeof userPreferences.$inferInsert;
 
 export type NotificationLogEntry = typeof notificationLog.$inferSelect;
 export type NewNotificationLogEntry = typeof notificationLog.$inferInsert;
+
+export type PushTicket = typeof pushTickets.$inferSelect;
+export type NewPushTicket = typeof pushTickets.$inferInsert;
 
 export type ProcessedRevenuecatEvent =
   typeof processedRevenuecatEvents.$inferSelect;

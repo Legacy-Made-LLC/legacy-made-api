@@ -10,6 +10,12 @@ import {
   TIME_OF_DAY_MINUTES,
 } from './notification-schemas';
 
+/**
+ * Never-sent users idle longer than this many days get no reminder until they
+ * open the app again. null = no activity gate. See `getEligibleReminderUsers`.
+ */
+export const REMINDER_NEVER_SENT_ACTIVE_WITHIN_DAYS: number | null = 90;
+
 @Injectable()
 export class PreferencesService {
   private readonly logger = new Logger(PreferencesService.name);
@@ -163,29 +169,51 @@ export class PreferencesService {
   /**
    * Query users eligible for a reminder right now.
    *
-   * The SQL does all the heavy lifting in a single pass:
+   * Called by the scheduler every 30 minutes (at :00 and :30). One pass:
    *
-   * 1. **Filter**: Only users with `reminders.enabled = true`.
+   * 1. **Enabled**: `reminders.enabled` is true, or the `reminders` key is
+   *    missing. Reminders are opt-out and the app fills defaults on read, so
+   *    most rows never stored the key; only an explicit `false` opts out.
    *
-   * 2. **Time-of-day window**: Converts NOW() to the user's local timezone,
-   *    computes minutes-since-midnight, and checks if it falls within ±15 min
-   *    of their preferred time. Uses LEAST(ABS(diff), 1440 - ABS(diff)) for
-   *    correct modular arithmetic at the midnight boundary (e.g. preferred
-   *    23:55, current 00:05 → diff = 10, not 1430).
+   * 2. **Has a device**: at least one push token. Without one there is
+   *    nothing to deliver to.
    *
-   * 3. **Last-sent lookup**: LEFT JOIN LATERAL on notification_log to find
-   *    the most recent 'reminder' row per user. Using LATERAL avoids a
-   *    correlated subquery in the WHERE clause.
+   * 3. **Time-of-day window**: the user's local minute-of-day falls in
+   *    [preferred - 15, preferred + 15), modulo 1440. The window is 30 minutes
+   *    wide and half-open, so exactly one of the :00/:30 runs matches any
+   *    preferred minute, including :15 and :45.
    *
-   * 4. **Frequency gate** (two branches, OR'd):
-   *    a. **Has prior send**: `sent_at + frequency_interval <= NOW()`
-   *    b. **Never sent**: Uses `enabled_at` (or `updated_at` as fallback)
-   *       with **half** the frequency interval, so new users get their first
-   *       reminder sooner than a full cycle.
+   * 4. **Frequency gate**, by the user's local calendar date. The window
+   *    matches once a day, so comparing dates means "weekly" is exactly 7
+   *    days. (Comparing timestamps drifted to 8: each send is logged a few
+   *    seconds after the run, so 7 days later it was still a few seconds
+   *    short.)
+   *    a. **Sent before**: last reminder's local date is at least
+   *       `frequency` days ago.
+   *    b. **Never sent**: half the frequency has passed since `enabled_at`,
+   *       or since signup when reminders were never toggled. Never
+   *       `updated_at`, which every app open resets.
+   *
+   * 5. **Activity gate** (never-sent users only, optional): the user opened
+   *    the app within `neverSentActiveWithinDays` days. `updated_at` is
+   *    bumped by the timezone upsert on every app open.
+   *
+   * @param options.neverSentActiveWithinDays skip never-sent users idle longer
+   *   than this many days; null sends to all of them.
+   * @param options.now evaluate at this instant instead of the database clock
+   *   (tests only).
    */
-  async getEligibleReminderUsers(): Promise<
-    { userId: string; timezone: string; notifications: unknown }[]
-  > {
+  async getEligibleReminderUsers(
+    options: { neverSentActiveWithinDays?: number | null; now?: Date } = {},
+  ): Promise<{ userId: string; timezone: string; notifications: unknown }[]> {
+    const activeWithinDays =
+      options.neverSentActiveWithinDays === undefined
+        ? REMINDER_NEVER_SENT_ACTIVE_WITHIN_DAYS
+        : options.neverSentActiveWithinDays;
+    const now = options.now
+      ? sql`${options.now.toISOString()}::timestamptz`
+      : sql`NOW()`;
+
     return this.db.bypassRls(async (tx) => {
       const rows = await tx.execute<{
         user_id: string;
@@ -196,9 +224,10 @@ export class PreferencesService {
           -- Pre-compute derived values from JSONB so the WHERE clause stays clean.
           SELECT
             up.*,
-            -- User's current local time as minutes since midnight
-            EXTRACT(HOUR FROM NOW() AT TIME ZONE up.timezone)::int * 60
-              + EXTRACT(MINUTE FROM NOW() AT TIME ZONE up.timezone)::int
+            -- User's current local date and time as minutes since midnight
+            (${now} AT TIME ZONE up.timezone)::date AS local_today,
+            EXTRACT(HOUR FROM ${now} AT TIME ZONE up.timezone)::int * 60
+              + EXTRACT(MINUTE FROM ${now} AT TIME ZONE up.timezone)::int
               AS current_minutes,
             -- Preferred notification time as minutes since midnight
             CASE up.notifications->'reminders'->>'time_of_day'
@@ -210,22 +239,25 @@ export class PreferencesService {
                 + SPLIT_PART(NULLIF(up.notifications->'reminders'->>'custom_time', ''), ':', 2)::int,
                 ${TIME_OF_DAY_MINUTES.evening}::int
               )
-              ELSE ${TIME_OF_DAY_MINUTES.evening}
+              ELSE ${TIME_OF_DAY_MINUTES.evening}::int
             END AS preferred_minutes,
-            -- Frequency as days (full and half for first-reminder grace period)
+            -- Frequency in days
             CASE up.notifications->'reminders'->>'frequency'
               WHEN 'weekly' THEN ${FREQUENCY_DAYS.weekly}::int
               WHEN 'biweekly' THEN ${FREQUENCY_DAYS.biweekly}::int
               WHEN 'monthly' THEN ${FREQUENCY_DAYS.monthly}::int
               ELSE ${FREQUENCY_DAYS.weekly}::int
             END AS freq_days,
-            -- When reminders were enabled (for first-send grace period)
+            -- Start of the first-reminder grace period: when reminders were
+            -- turned on, else signup
             COALESCE(
               (up.notifications->'reminders'->>'enabled_at')::timestamptz,
-              up.updated_at
+              u.created_at
             ) AS effective_enabled_at
           FROM user_preferences up
-          WHERE up.notifications->'reminders'->>'enabled' = 'true'
+          JOIN users u ON u.id = up.user_id
+          WHERE COALESCE((up.notifications->'reminders'->>'enabled')::boolean, true)
+            AND EXISTS (SELECT 1 FROM push_tokens pt WHERE pt.user_id = up.user_id)
         )
         SELECT rp.user_id, rp.timezone, rp.notifications
         FROM reminder_prefs rp
@@ -239,24 +271,27 @@ export class PreferencesService {
           LIMIT 1
         ) last_sent ON true
         WHERE
-          -- Time-of-day window: ±15 min with midnight wraparound.
-          -- LEAST picks the shorter arc around the 1440-minute clock,
-          -- e.g. preferred=23:55 current=00:05 → LEAST(1430, 10) = 10.
-          LEAST(
-            ABS(rp.current_minutes - rp.preferred_minutes),
-            1440 - ABS(rp.current_minutes - rp.preferred_minutes)
-          ) < 15
+          -- Half-open window [preferred - 15, preferred + 15) on the
+          -- 1440-minute clock; shifting by +15 and wrapping turns it into
+          -- [0, 30). E.g. preferred 23:55, current 00:05 → (5 - 1435 + 15) mod 1440 = 25.
+          MOD(rp.current_minutes - rp.preferred_minutes + 15 + 1440, 1440) < 30
           AND (
-            -- Branch A: has been sent before — check full frequency interval
+            -- Branch A: sent before, at least freq_days local days ago
             (
               last_sent.sent_at IS NOT NULL
-              AND last_sent.sent_at <= NOW() - make_interval(days => rp.freq_days)
+              AND (last_sent.sent_at AT TIME ZONE rp.timezone)::date
+                <= rp.local_today - rp.freq_days
             )
             OR
-            -- Branch B: never sent — use half frequency for faster first reminder
+            -- Branch B: never sent, half the frequency after enabling/signup
             (
               last_sent.sent_at IS NULL
-              AND rp.effective_enabled_at <= NOW() - make_interval(days => rp.freq_days / 2)
+              AND (rp.effective_enabled_at AT TIME ZONE rp.timezone)::date
+                <= rp.local_today - rp.freq_days / 2
+              AND (
+                ${activeWithinDays}::int IS NULL
+                OR rp.updated_at >= ${now} - make_interval(days => ${activeWithinDays}::int)
+              )
             )
           )
       `);

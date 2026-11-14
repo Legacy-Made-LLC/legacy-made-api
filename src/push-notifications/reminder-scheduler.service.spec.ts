@@ -16,7 +16,7 @@ describe('ReminderSchedulerService', () => {
     };
 
     mockPushNotifications = {
-      sendToUser: jest.fn().mockResolvedValue(undefined),
+      sendToUser: jest.fn().mockResolvedValue({ tokens: 1, accepted: 1 }),
     };
 
     mockTx = {
@@ -73,19 +73,19 @@ describe('ReminderSchedulerService', () => {
         { userId: 'user_2', timezone: 'UTC', notifications: {} },
       ]);
 
-      // First user's push send throws (transaction rolls back),
-      // second user succeeds
+      // First user's push send throws, second user succeeds
       mockPushNotifications.sendToUser
         .mockRejectedValueOnce(new Error('Push failed'))
-        .mockResolvedValueOnce(undefined);
+        .mockResolvedValueOnce({ tokens: 1, accepted: 1 });
 
       await service.sendReminders();
 
-      // Both users should be attempted
+      // Both users attempted; only the successful one is logged
       expect(mockPushNotifications.sendToUser).toHaveBeenCalledTimes(2);
+      expect(mockTx.insert).toHaveBeenCalledTimes(1);
     });
 
-    it('should insert log row before sending push within same transaction', async () => {
+    it('should send the push before writing the log row', async () => {
       mockPreferencesService.getEligibleReminderUsers.mockResolvedValue([
         { userId: 'user_1', timezone: 'UTC', notifications: {} },
       ]);
@@ -97,12 +97,26 @@ describe('ReminderSchedulerService', () => {
       });
       mockPushNotifications.sendToUser.mockImplementation(() => {
         callOrder.push('push');
-        return Promise.resolve();
+        return Promise.resolve({ tokens: 1, accepted: 1 });
       });
 
       await service.sendReminders();
 
-      expect(callOrder).toEqual(['insert', 'push']);
+      expect(callOrder).toEqual(['push', 'insert']);
+    });
+
+    it('should not log a reminder Expo accepted for no device', async () => {
+      mockPreferencesService.getEligibleReminderUsers.mockResolvedValue([
+        { userId: 'user_1', timezone: 'UTC', notifications: {} },
+      ]);
+      mockPushNotifications.sendToUser.mockResolvedValue({
+        tokens: 0,
+        accepted: 0,
+      });
+
+      await service.sendReminders();
+
+      expect(mockTx.insert).not.toHaveBeenCalled();
     });
   });
 });
