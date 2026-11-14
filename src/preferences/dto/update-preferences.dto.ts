@@ -28,7 +28,11 @@ function stripDefaults<T extends ZodRawShape>(schema: ZodObject<T>) {
 
 export const updatePreferencesSchema = z.object({
   notifications: z.object({
-    reminders: stripDefaults(RemindersSchema).partial().optional(),
+    // `enabled_at` is server-managed (set when reminders are turned on), so
+    // it is not accepted from clients; an unknown key is stripped.
+    reminders: stripDefaults(RemindersSchema.omit({ enabled_at: true }))
+      .partial()
+      .optional(),
   }),
 });
 

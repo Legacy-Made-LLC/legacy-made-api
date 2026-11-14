@@ -150,6 +150,7 @@ describeIfEnv('Reminder delivery integration', () => {
       lastOpenDaysAgo?: number;
       lastSentAt?: Date;
       token?: boolean;
+      timezone?: string;
     } = {},
   ) {
     const daysAgo = (days: number) =>
@@ -162,7 +163,7 @@ describeIfEnv('Reminder delivery integration', () => {
       });
       await tx.insert(userPreferences).values({
         userId: id,
-        timezone: TZ,
+        timezone: opts.timezone ?? TZ,
         notifications: opts.notifications ?? {},
         updatedAt: daysAgo(opts.lastOpenDaysAgo ?? 1),
       });
@@ -195,6 +196,9 @@ describeIfEnv('Reminder delivery integration', () => {
       .map((u) => u.userId)
       .filter((id) => id.startsWith('rem_test_'))
       .sort();
+
+  const isEligible = async (userId: string, now: Date) =>
+    (await eligibleIds(now, 90)).includes(userId);
 
   beforeAll(async () => {
     ownerPool = new Pool({ connectionString: DB_URL });
@@ -298,8 +302,115 @@ describeIfEnv('Reminder delivery integration', () => {
       expect(await eligibleIds(RUN_1800, null)).toContain('rem_test_idle');
     });
 
-    it('matches each preferred time in exactly one run', async () => {
-      expect(await eligibleIds(RUN_1830, null)).toEqual([]);
+    it('catches up for 2 hours after the preferred time, then stops', async () => {
+      // 18:30 and 19:30 Denver still deliver a missed 18:00 reminder; 20:00 doesn't.
+      expect(await isEligible('rem_test_defaults', RUN_1830)).toBe(true);
+      expect(
+        await isEligible('rem_test_defaults', new Date('2026-11-20T02:30:00Z')),
+      ).toBe(true);
+      expect(
+        await isEligible('rem_test_defaults', new Date('2026-11-20T03:00:00Z')),
+      ).toBe(false);
+    });
+
+    it('sends at most once a day across the catch-up runs', async () => {
+      await seedUser('rem_test_once_a_day');
+      expect(await isEligible('rem_test_once_a_day', RUN_1800)).toBe(true);
+      // The 18:00 run sends and logs it a few seconds later
+      await asOwner((tx) =>
+        tx.insert(notificationLog).values({
+          userId: 'rem_test_once_a_day',
+          type: 'reminder',
+          channel: 'push',
+          sentAt: new Date(RUN_1800.getTime() + 3000),
+        }),
+      );
+      expect(await isEligible('rem_test_once_a_day', RUN_1830)).toBe(false);
+    });
+
+    it('never catches up across local midnight or sends tomorrow early', async () => {
+      // 23:30 Denver reminder, due tonight (Thu 2026-11-19)
+      await seedUser('rem_test_late_night', {
+        notifications: {
+          reminders: {
+            enabled: true,
+            time_of_day: 'custom',
+            custom_time: '23:30',
+          },
+        },
+        lastSentAt: new Date('2026-11-13T06:30:02Z'),
+      });
+      // 00:15 Denver reminder, due Friday morning, not Thursday night
+      await seedUser('rem_test_after_midnight', {
+        notifications: {
+          reminders: {
+            enabled: true,
+            time_of_day: 'custom',
+            custom_time: '00:15',
+          },
+        },
+        lastSentAt: new Date('2026-11-13T07:00:02Z'),
+      });
+      const at2330 = new Date('2026-11-20T06:30:00Z');
+      const at0000 = new Date('2026-11-20T07:00:00Z');
+      const at0030 = new Date('2026-11-20T07:30:00Z');
+
+      expect(await isEligible('rem_test_late_night', at2330)).toBe(true);
+      expect(await isEligible('rem_test_late_night', at0030)).toBe(false);
+      expect(await isEligible('rem_test_after_midnight', at2330)).toBe(false);
+      expect(await isEligible('rem_test_after_midnight', at0000)).toBe(true);
+    });
+
+    it('delivers a time skipped by the spring daylight-saving change', async () => {
+      // 02:15 doesn't exist in Denver on 2027-03-14; the 03:00 run catches up.
+      await seedUser('rem_test_dst_gap', {
+        notifications: {
+          reminders: {
+            enabled: true,
+            time_of_day: 'custom',
+            custom_time: '02:15',
+          },
+        },
+        lastSentAt: new Date('2027-03-07T09:15:02Z'),
+      });
+      expect(
+        await isEligible('rem_test_dst_gap', new Date('2027-03-14T09:00:00Z')),
+      ).toBe(true);
+    });
+
+    it('still runs when some rows hold values Postgres cannot cast', async () => {
+      await seedUser('rem_test_bad_tz', { timezone: '-0700' });
+      await seedUser('rem_test_bad_enabled_at', {
+        notifications: { reminders: { enabled: true, enabled_at: 'soon' } },
+      });
+      await seedUser('rem_test_bad_enabled', {
+        notifications: { reminders: { enabled: 'maybe' } },
+      });
+      await seedUser('rem_test_bad_custom_time', {
+        notifications: {
+          reminders: {
+            enabled: true,
+            time_of_day: 'custom',
+            custom_time: 'ab:cd',
+          },
+        },
+      });
+
+      const ids = await eligibleIds(RUN_1800, 90);
+
+      // Good rows are unaffected
+      expect(ids).toContain('rem_test_defaults');
+      // Bad values fall back: junk enabled_at → signup date, junk enabled →
+      // on, junk custom_time → 18:00
+      expect(ids).toEqual(
+        expect.arrayContaining([
+          'rem_test_bad_enabled_at',
+          'rem_test_bad_enabled',
+          'rem_test_bad_custom_time',
+        ]),
+      );
+      // Unknown timezone → UTC, where it's 01:00, so not now
+      expect(ids).not.toContain('rem_test_bad_tz');
     });
 
     it('keeps weekly at 7 days across the spring daylight-saving change', async () => {
@@ -375,7 +486,7 @@ describeIfEnv('Reminder delivery integration', () => {
 
       const result = await push.processReceipts();
 
-      expect(result.errors).toBeGreaterThanOrEqual(1);
+      expect(result).toEqual({ checked: 1, ok: 0, errors: 1 });
       const remaining = await asOwner(async (tx) => ({
         tokens: await tx
           .select()

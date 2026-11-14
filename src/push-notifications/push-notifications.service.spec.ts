@@ -180,6 +180,18 @@ describe('PushNotificationsService', () => {
       ]);
     });
 
+    it('should still report the send when bookkeeping fails afterward', async () => {
+      const { insertValues } = mockTokensForUser(['token-1']);
+      insertValues.mockRejectedValue(new Error('permission denied'));
+      mockSendPushNotificationsAsync.mockResolvedValue([
+        { status: 'ok', id: 'ticket-1' },
+      ]);
+
+      await expect(
+        service.sendToUser('user-1', 'Title', 'Body'),
+      ).resolves.toEqual({ tokens: 1, accepted: 1 });
+    });
+
     it('should report zero accepted when every device is rejected', async () => {
       const { insertValues } = mockTokensForUser(['token-1']);
       mockSendPushNotificationsAsync.mockResolvedValue([

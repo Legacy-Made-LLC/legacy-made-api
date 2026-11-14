@@ -85,6 +85,9 @@ export class PushNotificationsService {
             userId,
             platform: dto.platform,
             updatedAt: new Date(),
+            // A takeover starts a new registration; don't hand the caller
+            // the previous owner's timestamp.
+            createdAt: sql`CASE WHEN ${pushTokens.userId} = excluded.user_id THEN ${pushTokens.createdAt} ELSE now() END`,
           },
         })
         .returning();
@@ -202,17 +205,30 @@ export class PushNotificationsService {
       }
     });
 
-    if (staleTokens.length > 0) {
-      this.logger.warn(
-        `Removing ${staleTokens.length} stale DeviceNotRegistered token(s) for user ${userId}`,
+    // Bookkeeping after the send is best-effort: Expo already accepted the
+    // messages, so an error here must not make the caller treat the send as
+    // failed (the scheduler would skip logging it and resend every day).
+    try {
+      if (staleTokens.length > 0) {
+        this.logger.warn(
+          `Removing ${staleTokens.length} stale DeviceNotRegistered token(s) for user ${userId}`,
+        );
+        await this.removeStaleTokens(staleTokens);
+      }
+
+      if (acceptedTickets.length > 0) {
+        await this.db.bypassRls(async (tx) => {
+          await tx.insert(pushTickets).values(acceptedTickets);
+        });
+      }
+    } catch (error) {
+      this.logger.error(
+        `Push bookkeeping failed after send for user ${userId}`,
+        error,
       );
-      await this.removeStaleTokens(staleTokens);
     }
 
     if (acceptedTickets.length > 0) {
-      await this.db.bypassRls(async (tx) => {
-        await tx.insert(pushTickets).values(acceptedTickets);
-      });
       this.logger.log(
         `Expo accepted ${acceptedTickets.length} of ${messages.length} push message(s) for user ${userId}`,
       );
@@ -293,16 +309,23 @@ export class PushNotificationsService {
       await this.removeStaleTokens(staleTokens);
     }
 
-    await this.db.bypassRls(async (tx) => {
+    const expired = await this.db.bypassRls(async (tx) => {
       if (doneTicketIds.length > 0) {
         await tx
           .delete(pushTickets)
           .where(inArray(pushTickets.ticketId, doneTicketIds));
       }
-      await tx
+      return tx
         .delete(pushTickets)
-        .where(lte(pushTickets.createdAt, sql`NOW() - INTERVAL '24 hours'`));
+        .where(lte(pushTickets.createdAt, sql`NOW() - INTERVAL '24 hours'`))
+        .returning({ ticketId: pushTickets.ticketId });
     });
+
+    if (expired.length > 0) {
+      this.logger.warn(
+        `Dropped ${expired.length} push ticket(s) that got no receipt within 24 hours`,
+      );
+    }
 
     if (result.checked > 0) {
       this.logger.log(
