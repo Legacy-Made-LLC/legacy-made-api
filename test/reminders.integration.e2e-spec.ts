@@ -365,6 +365,24 @@ describeIfEnv('Reminder delivery integration', () => {
       expect(await isEligible('rem_test_after_midnight', at0000)).toBe(true);
     });
 
+    it('treats an offset-style timezone as UTC, not with its sign inverted', async () => {
+      await seedUser('rem_test_offset_tz', { timezone: '+05:00' });
+      // Postgres reads "+05:00" as UTC-5, where 23:00 UTC would be 18:00
+      expect(
+        await isEligible(
+          'rem_test_offset_tz',
+          new Date('2026-11-19T23:00:00Z'),
+        ),
+      ).toBe(false);
+      // UTC fallback: 18:00 UTC is the evening reminder
+      expect(
+        await isEligible(
+          'rem_test_offset_tz',
+          new Date('2026-11-19T18:00:00Z'),
+        ),
+      ).toBe(true);
+    });
+
     it('sends a 23:50 reminder at the 00:00 run', async () => {
       await seedUser('rem_test_2350', {
         notifications: {

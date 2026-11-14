@@ -180,7 +180,7 @@ export class PreferencesService {
    * 1. **Sanitize** each row so one bad value can't fail the whole query (and
    *    with it every user's reminder): an unknown timezone falls back to UTC
    *    (logged), an unparseable `enabled_at` or `custom_time` is ignored
-   *    (`try_timezone` / `try_timestamptz` from migration 0019), and only an
+   *    (`try_timestamptz` from migration 0020), and only an
    *    explicit `enabled: false` opts out.
    *
    * 2. **Enabled**: `reminders.enabled` is not false. Reminders are opt-out
@@ -241,7 +241,12 @@ export class PreferencesService {
             up.notifications,
             up.updated_at,
             u.created_at AS signed_up_at,
-            COALESCE(try_timezone(up.timezone), 'UTC') AS tz,
+            -- Only real zone names (any case). Postgres also accepts POSIX
+            -- strings like "+05:00" in AT TIME ZONE but reads the sign
+            -- inverted, so those fall back to UTC too.
+            CASE WHEN LOWER(up.timezone) IN (SELECT LOWER(name) FROM pg_timezone_names)
+              THEN up.timezone ELSE 'UTC'
+            END AS tz,
             up.notifications->'reminders' AS r
           FROM user_preferences up
           JOIN users u ON u.id = up.user_id

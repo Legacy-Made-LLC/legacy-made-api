@@ -32,19 +32,23 @@ export class ReminderSchedulerService {
     // spills past local midnight still counts as the slot's day.
     const runStartedAt = new Date();
     let sent = 0;
+    let skipped = 0;
     let undelivered = 0;
     let failed = 0;
 
     try {
-      const users = await this.preferencesService.getEligibleReminderUsers();
+      // Same instant for eligibility and sent_at, so app/DB clock skew can't
+      // shift a midnight run's dates
+      const users = await this.preferencesService.getEligibleReminderUsers({
+        now: runStartedAt,
+      });
 
       for (const user of users) {
         try {
-          if (await this.sendReminder(user.userId, runStartedAt)) {
-            sent++;
-          } else {
-            undelivered++;
-          }
+          const outcome = await this.sendReminder(user.userId, runStartedAt);
+          if (outcome === 'sent') sent++;
+          else if (outcome === 'already-claimed') skipped++;
+          else undelivered++;
         } catch (error) {
           failed++;
           this.logger.error(
@@ -59,7 +63,7 @@ export class ReminderSchedulerService {
     }
 
     this.logger.log(
-      `Reminder check complete: ${sent} sent, ${undelivered} not accepted by Expo, ${failed} failed`,
+      `Reminder check complete: ${sent} sent, ${skipped} already sent, ${undelivered} not accepted by Expo, ${failed} failed`,
     );
   }
 
@@ -74,20 +78,21 @@ export class ReminderSchedulerService {
    * 3. If no device accepted it (no live token, all rejected) or the send
    *    threw (network, Expo auth), delete the claim so the user stays
    *    eligible and a later run retries.
+   *    A network error after Expo already accepted can therefore cause one
+   *    duplicate; that's preferred over losing the reminder.
    *
    * @param runStartedAt start of the scheduler run; logged as `sent_at`.
-   * @returns true when Expo accepted the reminder for at least one device.
    */
   private async sendReminder(
     userId: string,
     runStartedAt: Date,
-  ): Promise<boolean> {
+  ): Promise<'sent' | 'already-claimed' | 'not-accepted'> {
     const claimId = await this.claimReminderSlot(userId, runStartedAt);
     if (!claimId) {
       this.logger.debug(
         `Reminder for user ${userId} already claimed; skipping`,
       );
-      return false;
+      return 'already-claimed';
     }
 
     const message =
@@ -110,11 +115,12 @@ export class ReminderSchedulerService {
         );
       }
     } finally {
-      if (accepted === 0) await this.releaseClaim(claimId);
+      if (accepted === 0) await this.releaseClaim(claimId, userId);
     }
 
-    if (accepted > 0) this.logger.debug(`Sent reminder to user ${userId}`);
-    return accepted > 0;
+    if (accepted === 0) return 'not-accepted';
+    this.logger.debug(`Sent reminder to user ${userId}`);
+    return 'sent';
   }
 
   /**
@@ -146,10 +152,21 @@ export class ReminderSchedulerService {
     });
   }
 
-  /** Delete a claim whose reminder wasn't delivered. */
-  private async releaseClaim(claimId: string): Promise<void> {
-    await this.db.bypassRls(async (tx) => {
-      await tx.delete(notificationLog).where(eq(notificationLog.id, claimId));
-    });
+  /**
+   * Delete a claim whose reminder wasn't delivered. Never throws, so it can't
+   * hide the send's own error; if it fails, that reminder is skipped until
+   * the next period.
+   */
+  private async releaseClaim(claimId: string, userId: string): Promise<void> {
+    try {
+      await this.db.bypassRls(async (tx) => {
+        await tx.delete(notificationLog).where(eq(notificationLog.id, claimId));
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to release reminder claim for user ${userId}; reminder skipped this period`,
+        error,
+      );
+    }
   }
 }
