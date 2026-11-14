@@ -154,8 +154,8 @@ export class ReminderSchedulerService {
 
   /**
    * Delete a claim whose reminder wasn't delivered. Never throws, so it can't
-   * hide the send's own error; if it fails, that reminder is skipped until
-   * the next period.
+   * hide the send's own error. If it fails, the leftover row counts as a sent
+   * reminder, so the user gets none until their next frequency period.
    */
   private async releaseClaim(claimId: string, userId: string): Promise<void> {
     try {
@@ -164,7 +164,7 @@ export class ReminderSchedulerService {
       });
     } catch (error) {
       this.logger.error(
-        `Failed to release reminder claim for user ${userId}; reminder skipped this period`,
+        `Failed to release reminder claim for user ${userId}; the leftover row counts as sent, so no reminder until their next frequency period`,
         error,
       );
     }

@@ -212,8 +212,8 @@ export class PreferencesService {
    *
    * @param options.neverSentActiveWithinDays skip never-sent users idle longer
    *   than this many days; null sends to all of them.
-   * @param options.now evaluate at this instant instead of the database clock
-   *   (tests only).
+   * @param options.now evaluate at this instant instead of the database
+   *   clock (the scheduler passes its run start).
    */
   async getEligibleReminderUsers(
     options: { neverSentActiveWithinDays?: number | null; now?: Date } = {},

@@ -130,5 +130,25 @@ describe('ReminderSchedulerService', () => {
       expect(mockPushNotifications.sendToUser).toHaveBeenCalledTimes(2);
       expect(mockTx.delete).toHaveBeenCalledTimes(1);
     });
+
+    it('should evaluate eligibility at the run start', async () => {
+      await service.sendReminders();
+
+      const [options] =
+        mockPreferencesService.getEligibleReminderUsers.mock.calls[0];
+      expect(options.now).toBeInstanceOf(Date);
+    });
+
+    it('should log, not throw, when releasing a claim fails', async () => {
+      eligible('user_1');
+      mockPushNotifications.sendToUser.mockResolvedValue({
+        tokens: 1,
+        accepted: 0,
+      });
+      mockTx.where.mockRejectedValue(new Error('db down'));
+
+      await expect(service.sendReminders()).resolves.toBeUndefined();
+      expect(mockTx.delete).toHaveBeenCalledTimes(1);
+    });
   });
 });
