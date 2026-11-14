@@ -1,9 +1,16 @@
+// Must load first so Sentry can instrument the modules imported below.
+import './instrument';
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ApiConfigService } from './config/api-config.service';
+import { SentryLogger } from './lib/sentry-logger';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create(AppModule, {
+    rawBody: true,
+    logger: new SentryLogger(),
+  });
 
   // Configure CORS using allowed origins from config
   const config = app.get(ApiConfigService);

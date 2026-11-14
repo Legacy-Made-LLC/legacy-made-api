@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { SentryCron } from '@sentry/nestjs';
 import { eq, sql } from 'drizzle-orm';
 import { DbService } from '../db/db.service';
 import { PreferencesService } from '../preferences/preferences.service';
@@ -25,6 +26,8 @@ export class ReminderSchedulerService {
 
   // waitForCompletion: a slow run is never overlapped by the next one.
   @Cron(CronExpression.EVERY_30_MINUTES, { waitForCompletion: true })
+  // Sentry alerts when a run is missed or overruns; schedule comes from @Cron.
+  @SentryCron('reminder-scheduler', { checkinMargin: 5, maxRuntime: 25 })
   async sendReminders(): Promise<void> {
     this.logger.log('Checking for eligible reminder recipients...');
 

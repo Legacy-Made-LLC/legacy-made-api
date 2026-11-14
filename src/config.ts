@@ -7,6 +7,9 @@ export const configSchema = z.object({
     .enum(['development', 'test', 'production'])
     .default('development'),
 
+  // SENTRY (read directly by src/instrument.ts; unset disables reporting)
+  SENTRY_DSN: z.url().optional(),
+
   // DATABASE
   DATABASE_URL_APP: z.string(),
   DATABASE_URL_MIGRATIONS: z.string(),
