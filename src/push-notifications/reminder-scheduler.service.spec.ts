@@ -131,24 +131,37 @@ describe('ReminderSchedulerService', () => {
       expect(mockTx.delete).toHaveBeenCalledTimes(1);
     });
 
-    it('should evaluate eligibility at the run start', async () => {
-      await service.sendReminders();
+    it('should use the run start for eligibility and as sent_at', async () => {
+      const runStart = new Date('2026-11-20T01:00:00.000Z');
+      jest.useFakeTimers({ now: runStart });
+      try {
+        eligible('user_1');
+        await service.sendReminders();
+      } finally {
+        jest.useRealTimers();
+      }
 
       const [options] =
         mockPreferencesService.getEligibleReminderUsers.mock.calls[0];
-      expect(options.now).toBeInstanceOf(Date);
+      expect(options.now).toEqual(runStart);
+      // The claim insert (second execute) carries the same instant
+      const claimSql = JSON.stringify(mockTx.execute.mock.calls[1][0]);
+      expect(claimSql).toContain(runStart.toISOString());
     });
 
     it('should log, not throw, when releasing a claim fails', async () => {
-      eligible('user_1');
-      mockPushNotifications.sendToUser.mockResolvedValue({
-        tokens: 1,
-        accepted: 0,
-      });
+      const errorSpy = jest
+        .spyOn(service['logger'], 'error')
+        .mockImplementation(() => undefined);
       mockTx.where.mockRejectedValue(new Error('db down'));
 
-      await expect(service.sendReminders()).resolves.toBeUndefined();
-      expect(mockTx.delete).toHaveBeenCalledTimes(1);
+      await expect(
+        service['releaseClaim']('claim-1', 'user_1'),
+      ).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to release reminder claim'),
+        expect.any(Error),
+      );
     });
   });
 });
