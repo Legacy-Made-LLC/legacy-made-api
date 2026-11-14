@@ -133,7 +133,7 @@ describe('EntitlementsService', () => {
       expect(individualConfig.quotas).toEqual({
         entries: -1, // unlimited
         wishes: -1, // unlimited
-        trusted_contacts: 1,
+        trusted_contacts: 3,
         family_profiles: 0,
         legacy_messages: -1, // unlimited
         storage_mb: 500,
@@ -384,7 +384,7 @@ describe('EntitlementsService', () => {
     });
 
     describe('individual tier - limited quotas', () => {
-      it('should allow 1 trusted contact when at 0', async () => {
+      it('should allow a trusted contact when at 0', async () => {
         mockDbService.rls.mockImplementation((callback) =>
           callback(createMockTx('individual', 0)),
         );
@@ -394,10 +394,8 @@ describe('EntitlementsService', () => {
         expect(result.allowed).toBe(true);
       });
 
-      // Note: trusted_contacts counting is not yet implemented (returns 0)
-      // This test documents the expected behavior once implemented
-      it('should have limit of 1 for trusted_contacts', () => {
-        expect(TIER_CONFIG.individual.quotas.trusted_contacts).toBe(1);
+      it('should have limit of 3 for trusted_contacts', () => {
+        expect(TIER_CONFIG.individual.quotas.trusted_contacts).toBe(3);
       });
 
       it('should deny family_profiles (quota is 0)', async () => {
