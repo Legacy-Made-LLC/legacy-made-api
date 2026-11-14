@@ -10,6 +10,18 @@ import {
   TIME_OF_DAY_MINUTES,
 } from './notification-schemas';
 
+/**
+ * Never-sent users idle longer than this many days get no reminder until they
+ * open the app again. null = no activity gate. See `getEligibleReminderUsers`.
+ */
+export const REMINDER_NEVER_SENT_ACTIVE_WITHIN_DAYS: number | null = 90;
+
+/**
+ * How long after the preferred time a reminder can still go out, so a late or
+ * skipped scheduler run delays it instead of moving it to the next day.
+ */
+export const REMINDER_CATCH_UP_MINUTES = 120;
+
 @Injectable()
 export class PreferencesService {
   private readonly logger = new Logger(PreferencesService.name);
@@ -163,103 +175,176 @@ export class PreferencesService {
   /**
    * Query users eligible for a reminder right now.
    *
-   * The SQL does all the heavy lifting in a single pass:
+   * Called by the scheduler every 30 minutes (at :00 and :30). One pass:
    *
-   * 1. **Filter**: Only users with `reminders.enabled = true`.
+   * 1. **Sanitize** each row so one bad value can't fail the whole query (and
+   *    with it every user's reminder): an unknown timezone falls back to UTC
+   *    (logged), an unparseable `enabled_at` or `custom_time` is ignored
+   *    (`try_timestamptz` from migration 0020), and only an
+   *    explicit `enabled: false` opts out.
    *
-   * 2. **Time-of-day window**: Converts NOW() to the user's local timezone,
-   *    computes minutes-since-midnight, and checks if it falls within ±15 min
-   *    of their preferred time. Uses LEAST(ABS(diff), 1440 - ABS(diff)) for
-   *    correct modular arithmetic at the midnight boundary (e.g. preferred
-   *    23:55, current 00:05 → diff = 10, not 1430).
+   * 2. **Enabled**: `reminders.enabled` is not false. Reminders are opt-out
+   *    and the app fills defaults on read, so most rows never stored the key.
    *
-   * 3. **Last-sent lookup**: LEFT JOIN LATERAL on notification_log to find
-   *    the most recent 'reminder' row per user. Using LATERAL avoids a
-   *    correlated subquery in the WHERE clause.
+   * 3. **Has a device**: at least one push token. Without one there is
+   *    nothing to deliver to.
    *
-   * 4. **Frequency gate** (two branches, OR'd):
-   *    a. **Has prior send**: `sent_at + frequency_interval <= NOW()`
-   *    b. **Never sent**: Uses `enabled_at` (or `updated_at` as fallback)
-   *       with **half** the frequency interval, so new users get their first
-   *       reminder sooner than a full cycle.
+   * 4. **Time-of-day window**: from 15 minutes before the preferred local time
+   *    until 2 hours after it. The ±15 minutes give every preferred minute a
+   *    :00/:30 run (a 23:50 time goes out at 00:00); the rest catches up after
+   *    a late or skipped run (a deploy at 18:00, the spring daylight-saving
+   *    gap) but never across local midnight. Several runs can match; the
+   *    scheduler's claim and step 5 send once.
+   *
+   * 5. **Frequency gate**, by the user's local calendar date, so "weekly" is
+   *    exactly 7 days. (Comparing timestamps drifted to 8: each send is
+   *    logged a few seconds after the run, so 7 days later it was still a few
+   *    seconds short.) The scheduler logs each send at its run's start time.
+   *    a. **Sent before**: last reminder's local date is at least
+   *       `frequency` days ago.
+   *    b. **Never sent**: `frequency / 2` days (rounded down: 3 for weekly)
+   *       have passed since `enabled_at`, or since signup when reminders were
+   *       never toggled. Never `updated_at`, which every app open resets.
+   *
+   * 6. **Activity gate** (never-sent users only, optional): the user opened
+   *    the app within `neverSentActiveWithinDays` days. `updated_at` is
+   *    bumped by the timezone upsert on every app open.
+   *
+   * @param options.neverSentActiveWithinDays skip never-sent users idle longer
+   *   than this many days; null sends to all of them.
+   * @param options.now evaluate at this instant instead of the database
+   *   clock (the scheduler passes its run start).
    */
-  async getEligibleReminderUsers(): Promise<
-    { userId: string; timezone: string; notifications: unknown }[]
-  > {
+  async getEligibleReminderUsers(
+    options: { neverSentActiveWithinDays?: number | null; now?: Date } = {},
+  ): Promise<{ userId: string; timezone: string; notifications: unknown }[]> {
+    const activeWithinDays =
+      options.neverSentActiveWithinDays === undefined
+        ? REMINDER_NEVER_SENT_ACTIVE_WITHIN_DAYS
+        : options.neverSentActiveWithinDays;
+    const now = options.now
+      ? sql`${options.now.toISOString()}::timestamptz`
+      : sql`NOW()`;
+
     return this.db.bypassRls(async (tx) => {
       const rows = await tx.execute<{
         user_id: string;
         timezone: string;
         notifications: unknown;
+        tz_fallback: boolean;
       }>(sql`
-        WITH reminder_prefs AS (
-          -- Pre-compute derived values from JSONB so the WHERE clause stays clean.
+        WITH sanitized AS (
+          -- Step 1: values that could make a cast fail become NULL or a default.
           SELECT
-            up.*,
-            -- User's current local time as minutes since midnight
-            EXTRACT(HOUR FROM NOW() AT TIME ZONE up.timezone)::int * 60
-              + EXTRACT(MINUTE FROM NOW() AT TIME ZONE up.timezone)::int
-              AS current_minutes,
+            up.user_id,
+            up.timezone,
+            up.notifications,
+            up.updated_at,
+            u.created_at AS signed_up_at,
+            -- Only real zone names (any case). Postgres also accepts POSIX
+            -- strings like "+05:00" in AT TIME ZONE but reads the sign
+            -- inverted, so those fall back to UTC too.
+            CASE WHEN LOWER(up.timezone) IN (SELECT LOWER(name) FROM pg_timezone_names)
+              THEN up.timezone ELSE 'UTC'
+            END AS tz,
+            up.notifications->'reminders' AS r
+          FROM user_preferences up
+          JOIN users u ON u.id = up.user_id
+          WHERE COALESCE(LOWER(up.notifications->'reminders'->>'enabled'), '') <> 'false'
+            AND EXISTS (SELECT 1 FROM push_tokens pt WHERE pt.user_id = up.user_id)
+        ),
+        reminder_prefs AS (
+          SELECT
+            s.*,
+            (${now} AT TIME ZONE s.tz) AS local_now,
             -- Preferred notification time as minutes since midnight
-            CASE up.notifications->'reminders'->>'time_of_day'
+            CASE s.r->>'time_of_day'
               WHEN 'morning' THEN ${TIME_OF_DAY_MINUTES.morning}::int
               WHEN 'afternoon' THEN ${TIME_OF_DAY_MINUTES.afternoon}::int
               WHEN 'evening' THEN ${TIME_OF_DAY_MINUTES.evening}::int
-              WHEN 'custom' THEN COALESCE(
-                SPLIT_PART(NULLIF(up.notifications->'reminders'->>'custom_time', ''), ':', 1)::int * 60
-                + SPLIT_PART(NULLIF(up.notifications->'reminders'->>'custom_time', ''), ':', 2)::int,
-                ${TIME_OF_DAY_MINUTES.evening}::int
-              )
-              ELSE ${TIME_OF_DAY_MINUTES.evening}
+              WHEN 'custom' THEN CASE
+                WHEN s.r->>'custom_time' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+                THEN SPLIT_PART(s.r->>'custom_time', ':', 1)::int * 60
+                  + SPLIT_PART(s.r->>'custom_time', ':', 2)::int
+                ELSE ${TIME_OF_DAY_MINUTES.evening}::int
+              END
+              ELSE ${TIME_OF_DAY_MINUTES.evening}::int
             END AS preferred_minutes,
-            -- Frequency as days (full and half for first-reminder grace period)
-            CASE up.notifications->'reminders'->>'frequency'
+            CASE s.r->>'frequency'
               WHEN 'weekly' THEN ${FREQUENCY_DAYS.weekly}::int
               WHEN 'biweekly' THEN ${FREQUENCY_DAYS.biweekly}::int
               WHEN 'monthly' THEN ${FREQUENCY_DAYS.monthly}::int
               ELSE ${FREQUENCY_DAYS.weekly}::int
             END AS freq_days,
-            -- When reminders were enabled (for first-send grace period)
+            -- Start of the first-reminder grace period: when reminders were
+            -- turned on, else signup
             COALESCE(
-              (up.notifications->'reminders'->>'enabled_at')::timestamptz,
-              up.updated_at
+              try_timestamptz(s.r->>'enabled_at'),
+              s.signed_up_at
             ) AS effective_enabled_at
-          FROM user_preferences up
-          WHERE up.notifications->'reminders'->>'enabled' = 'true'
+          FROM sanitized s
+        ),
+        windowed AS (
+          SELECT
+            rp.*,
+            -- Minutes since the preferred time, in [-15, 1425)
+            MOD(
+              (EXTRACT(HOUR FROM rp.local_now)::int * 60
+                + EXTRACT(MINUTE FROM rp.local_now)::int)
+              - rp.preferred_minutes + 15 + 1440,
+              1440
+            ) - 15 AS minutes_since_preferred
+          FROM reminder_prefs rp
         )
-        SELECT rp.user_id, rp.timezone, rp.notifications
-        FROM reminder_prefs rp
+        SELECT w.user_id, w.timezone, w.notifications, w.tz <> w.timezone AS tz_fallback
+        FROM windowed w
         -- Most recent reminder sent to each user (at most one row via LIMIT 1)
         LEFT JOIN LATERAL (
           SELECT nl.sent_at
           FROM notification_log nl
-          WHERE nl.user_id = rp.user_id
+          WHERE nl.user_id = w.user_id
             AND nl.type = 'reminder'
           ORDER BY nl.sent_at DESC
           LIMIT 1
         ) last_sent ON true
         WHERE
-          -- Time-of-day window: ±15 min with midnight wraparound.
-          -- LEAST picks the shorter arc around the 1440-minute clock,
-          -- e.g. preferred=23:55 current=00:05 → LEAST(1430, 10) = 10.
-          LEAST(
-            ABS(rp.current_minutes - rp.preferred_minutes),
-            1440 - ABS(rp.current_minutes - rp.preferred_minutes)
-          ) < 15
+          -- Step 4: within [preferred - 15 min, preferred + 2 h) ...
+          w.minutes_since_preferred < ${REMINDER_CATCH_UP_MINUTES}::int
+          -- ... and, past the first 15 minutes, that slot falls on today's
+          -- local date: catch-up never crosses midnight. (Within 15 minutes it
+          -- may, so a 23:50 reminder goes out at the 00:00 run.)
           AND (
-            -- Branch A: has been sent before — check full frequency interval
+            w.minutes_since_preferred < 15
+            OR (w.local_now - make_interval(mins => w.minutes_since_preferred))::date
+              = w.local_now::date
+          )
+          AND (
+            -- Step 5a: sent before, at least freq_days local days ago
             (
               last_sent.sent_at IS NOT NULL
-              AND last_sent.sent_at <= NOW() - make_interval(days => rp.freq_days)
+              AND (last_sent.sent_at AT TIME ZONE w.tz)::date
+                <= w.local_now::date - w.freq_days
             )
             OR
-            -- Branch B: never sent — use half frequency for faster first reminder
+            -- Step 5b: never sent, half the frequency after enabling/signup
             (
               last_sent.sent_at IS NULL
-              AND rp.effective_enabled_at <= NOW() - make_interval(days => rp.freq_days / 2)
+              AND (w.effective_enabled_at AT TIME ZONE w.tz)::date
+                <= w.local_now::date - w.freq_days / 2
+              -- Step 6: activity gate
+              AND (
+                ${activeWithinDays}::int IS NULL
+                OR w.updated_at >= ${now} - make_interval(days => ${activeWithinDays}::int)
+              )
             )
           )
       `);
+
+      for (const r of rows.rows.filter((row) => row.tz_fallback)) {
+        this.logger.warn(
+          `Unknown timezone "${r.timezone}" for user ${r.user_id}; reminders use UTC`,
+        );
+      }
 
       return rows.rows.map((r) => ({
         userId: r.user_id,
