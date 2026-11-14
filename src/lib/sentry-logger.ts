@@ -37,7 +37,7 @@ export class SentryLogger extends ConsoleLogger {
  * @param message - the first argument to `logger.error`
  * @param optionalParams - the remaining arguments; a `Logger` instance appends
  *   its context name as the last one
- * @param level - Sentry level for message-only events
+ * @param level - Sentry level for the event, exception or message
  */
 export function captureLoggedError(
   message: unknown,

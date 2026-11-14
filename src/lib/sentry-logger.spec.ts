@@ -104,6 +104,10 @@ describe('redactText', () => {
       'Failed query: insert into "entries" ("title") values ($1)\nparams: Mom\'s will',
       'Failed query: insert into "entries" ("title") values ($1)\nparams: [redacted]',
     ],
+    [
+      '{"msg":"Failed query: select 1\\nparams: a,b","after":"keep"}',
+      '{"msg":"Failed query: select 1\\nparams: [redacted]","after":"keep"}',
+    ],
     ['GET /files/share/abc123?x=1', 'GET /files/share/[token]?x=1'],
     [
       '/access-invitations/eyJhbGc.x.y/accept',
@@ -117,5 +121,13 @@ describe('redactText', () => {
     ['to jane.doe+1@example.co.uk', 'to [email]'],
   ])('redacts %j', (input, expected) => {
     expect(redactText(input)).toBe(expected);
+  });
+});
+
+describe('redactText performance', () => {
+  it('stays fast on long text with no email in it', () => {
+    const started = Date.now();
+    redactText('a'.repeat(200_000));
+    expect(Date.now() - started).toBeLessThan(500);
   });
 });

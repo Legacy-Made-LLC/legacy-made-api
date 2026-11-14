@@ -7,14 +7,17 @@ import type { ErrorEvent } from '@sentry/nestjs';
 const REDACTION_RULES: ReadonlyArray<[RegExp, string]> = [
   // DrizzleQueryError messages end with every bound value, which can be
   // unencrypted plan data (names, notes, titles). The SQL above it is kept.
-  [/(\n|\\n)params: [\s\S]*$/, '$1params: [redacted]'],
+  [/\nparams: [\s\S]*$/, '\nparams: [redacted]'],
+  // The same tail inside JSON-escaped text: stop at the string's closing quote.
+  [/\\nparams: (?:[^"\\]|\\.)*/g, '\\nparams: [redacted]'],
   // Live tokens in public URL paths.
   [/(\/files\/share\/)[^/?#\s"]+/g, '$1[token]'],
   [/(\/access-invitations\/)[^/?#\s"]+/g, '$1[token]'],
   // Expo push tokens, which Expo echoes in its error and receipt messages.
   [/Expo(nent)?PushToken\[[^\]]*\]/g, 'ExpoPushToken[redacted]'],
   // Email addresses, plain or percent-encoded (as in query strings).
-  [/[A-Z0-9._%+-]+(@|%40)[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email]'],
+  // Bounded lengths keep this linear on long text with no "@" in it.
+  [/[A-Z0-9._%+-]{1,64}(@|%40)[A-Z0-9.-]{1,253}\.[A-Z]{2,}/gi, '[email]'],
 ];
 
 const MAX_DEPTH = 10;
@@ -53,7 +56,8 @@ function redactDeep(value: unknown, depth = 0): unknown {
  * Sentry `beforeSend` hook that strips personal data and secrets from an event.
  *
  * Covers the free-text fields that can carry them: the message, exception
- * values, extra data, the request URL and query string, breadcrumbs, and tags.
+ * values, extra data, the request URL and query string, breadcrumbs, tags, and
+ * the transaction name.
  * Error messages often interpolate them (recipient emails, Expo receipts,
  * failed-query params), and those lines stay only in the Railway logs.
  *
@@ -63,6 +67,10 @@ function redactDeep(value: unknown, depth = 0): unknown {
 export function redactEvent(event: ErrorEvent): ErrorEvent {
   if (event.message) {
     event.message = redactText(event.message);
+  }
+  // Named from the raw path when a guard throws before routing resolves.
+  if (event.transaction) {
+    event.transaction = redactText(event.transaction);
   }
 
   for (const exception of event.exception?.values ?? []) {
