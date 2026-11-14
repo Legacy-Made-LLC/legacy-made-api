@@ -178,8 +178,9 @@ export class PreferencesService {
    * Called by the scheduler every 30 minutes (at :00 and :30). One pass:
    *
    * 1. **Sanitize** each row so one bad value can't fail the whole query (and
-   *    with it every user's reminder): an unknown timezone falls back to UTC,
-   *    an unparseable `enabled_at` or `custom_time` is ignored, and only an
+   *    with it every user's reminder): an unknown timezone falls back to UTC
+   *    (logged), an unparseable `enabled_at` or `custom_time` is ignored
+   *    (`try_timezone` / `try_timestamptz` from migration 0019), and only an
    *    explicit `enabled: false` opts out.
    *
    * 2. **Enabled**: `reminders.enabled` is not false. Reminders are opt-out
@@ -189,16 +190,16 @@ export class PreferencesService {
    *    nothing to deliver to.
    *
    * 4. **Time-of-day window**: from 15 minutes before the preferred local time
-   *    until 2 hours after it, on the same local date. The early 15 minutes
-   *    let a :15 or :45 time match the :00/:30 run before it; the 2 hours
-   *    catch up after a late or skipped run (a deploy at 18:00, the spring
-   *    daylight-saving gap). Several runs can match; step 5 sends once.
+   *    until 2 hours after it. The ±15 minutes give every preferred minute a
+   *    :00/:30 run (a 23:50 time goes out at 00:00); the rest catches up after
+   *    a late or skipped run (a deploy at 18:00, the spring daylight-saving
+   *    gap) but never across local midnight. Several runs can match; the
+   *    scheduler's claim and step 5 send once.
    *
    * 5. **Frequency gate**, by the user's local calendar date, so "weekly" is
    *    exactly 7 days. (Comparing timestamps drifted to 8: each send is
    *    logged a few seconds after the run, so 7 days later it was still a few
-   *    seconds short.) Sends only happen on the scheduled slot's own date, so
-   *    a send's local date is its slot's date.
+   *    seconds short.) The scheduler logs each send at its run's start time.
    *    a. **Sent before**: last reminder's local date is at least
    *       `frequency` days ago.
    *    b. **Never sent**: `frequency / 2` days (rounded down: 3 for weekly)
@@ -230,6 +231,7 @@ export class PreferencesService {
         user_id: string;
         timezone: string;
         notifications: unknown;
+        tz_fallback: boolean;
       }>(sql`
         WITH sanitized AS (
           -- Step 1: values that could make a cast fail become NULL or a default.
@@ -239,9 +241,7 @@ export class PreferencesService {
             up.notifications,
             up.updated_at,
             u.created_at AS signed_up_at,
-            CASE WHEN up.timezone IN (SELECT name FROM pg_timezone_names)
-              THEN up.timezone ELSE 'UTC'
-            END AS tz,
+            COALESCE(try_timezone(up.timezone), 'UTC') AS tz,
             up.notifications->'reminders' AS r
           FROM user_preferences up
           JOIN users u ON u.id = up.user_id
@@ -272,11 +272,9 @@ export class PreferencesService {
               ELSE ${FREQUENCY_DAYS.weekly}::int
             END AS freq_days,
             -- Start of the first-reminder grace period: when reminders were
-            -- turned on (server-written ISO 8601), else signup
+            -- turned on, else signup
             COALESCE(
-              CASE WHEN s.r->>'enabled_at'
-                ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$'
-              THEN (s.r->>'enabled_at')::timestamptz END,
+              try_timestamptz(s.r->>'enabled_at'),
               s.signed_up_at
             ) AS effective_enabled_at
           FROM sanitized s
@@ -293,7 +291,7 @@ export class PreferencesService {
             ) - 15 AS minutes_since_preferred
           FROM reminder_prefs rp
         )
-        SELECT w.user_id, w.timezone, w.notifications
+        SELECT w.user_id, w.timezone, w.notifications, w.tz <> w.timezone AS tz_fallback
         FROM windowed w
         -- Most recent reminder sent to each user (at most one row via LIMIT 1)
         LEFT JOIN LATERAL (
@@ -307,10 +305,14 @@ export class PreferencesService {
         WHERE
           -- Step 4: within [preferred - 15 min, preferred + 2 h) ...
           w.minutes_since_preferred < ${REMINDER_CATCH_UP_MINUTES}::int
-          -- ... and that slot falls on today's local date (never catch up
-          -- across midnight, never send tomorrow's slot early)
-          AND (w.local_now - make_interval(mins => w.minutes_since_preferred))::date
-            = w.local_now::date
+          -- ... and, past the first 15 minutes, that slot falls on today's
+          -- local date: catch-up never crosses midnight. (Within 15 minutes it
+          -- may, so a 23:50 reminder goes out at the 00:00 run.)
+          AND (
+            w.minutes_since_preferred < 15
+            OR (w.local_now - make_interval(mins => w.minutes_since_preferred))::date
+              = w.local_now::date
+          )
           AND (
             -- Step 5a: sent before, at least freq_days local days ago
             (
@@ -332,6 +334,12 @@ export class PreferencesService {
             )
           )
       `);
+
+      for (const r of rows.rows.filter((row) => row.tz_fallback)) {
+        this.logger.warn(
+          `Unknown timezone "${r.timezone}" for user ${r.user_id}; reminders use UTC`,
+        );
+      }
 
       return rows.rows.map((r) => ({
         userId: r.user_id,

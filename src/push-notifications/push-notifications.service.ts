@@ -207,25 +207,33 @@ export class PushNotificationsService {
 
     // Bookkeeping after the send is best-effort: Expo already accepted the
     // messages, so an error here must not make the caller treat the send as
-    // failed (the scheduler would skip logging it and resend every day).
-    try {
-      if (staleTokens.length > 0) {
-        this.logger.warn(
-          `Removing ${staleTokens.length} stale DeviceNotRegistered token(s) for user ${userId}`,
-        );
+    // failed. Each step has its own guard so one failing doesn't skip the
+    // other.
+    if (staleTokens.length > 0) {
+      this.logger.warn(
+        `Removing ${staleTokens.length} stale DeviceNotRegistered token(s) for user ${userId}`,
+      );
+      try {
         await this.removeStaleTokens(staleTokens);
+      } catch (error) {
+        this.logger.error(
+          `Failed to remove stale tokens for user ${userId}`,
+          error,
+        );
       }
+    }
 
-      if (acceptedTickets.length > 0) {
+    if (acceptedTickets.length > 0) {
+      try {
         await this.db.bypassRls(async (tx) => {
           await tx.insert(pushTickets).values(acceptedTickets);
         });
+      } catch (error) {
+        this.logger.error(
+          `Failed to store push tickets for user ${userId}`,
+          error,
+        );
       }
-    } catch (error) {
-      this.logger.error(
-        `Push bookkeeping failed after send for user ${userId}`,
-        error,
-      );
     }
 
     if (acceptedTickets.length > 0) {

@@ -71,7 +71,10 @@ class FakeExpo {
   chunkPushNotificationReceiptIds(ids: string[]): string[][] {
     return ids.length > 0 ? [ids] : [];
   }
+  sentTo: string[] = [];
+
   sendPushNotificationsAsync(messages: { to: string }[]) {
+    this.sentTo.push(...messages.map((m) => m.to));
     return Promise.resolve(
       messages.map((message) => {
         const error = this.ticketErrors.get(message.to);
@@ -225,6 +228,7 @@ describeIfEnv('Reminder delivery integration', () => {
     const allowlist = [
       'rem_test_send_ok',
       'rem_test_send_dead',
+      'rem_test_send_twice',
       'rem_test_receipt',
     ];
     const config = fakeConfig(appRoleUrl(DB_URL!), allowlist);
@@ -361,6 +365,27 @@ describeIfEnv('Reminder delivery integration', () => {
       expect(await isEligible('rem_test_after_midnight', at0000)).toBe(true);
     });
 
+    it('sends a 23:50 reminder at the 00:00 run', async () => {
+      await seedUser('rem_test_2350', {
+        notifications: {
+          reminders: {
+            enabled: true,
+            time_of_day: 'custom',
+            custom_time: '23:50',
+          },
+        },
+        // Last sent at the 00:00 run a week earlier (Fri 2026-11-13 local)
+        lastSentAt: new Date('2026-11-13T07:00:02Z'),
+      });
+      const at2330 = new Date('2026-11-20T06:30:00Z');
+      const at0000 = new Date('2026-11-20T07:00:00Z');
+      const at0030 = new Date('2026-11-20T07:30:00Z');
+
+      expect(await isEligible('rem_test_2350', at2330)).toBe(false);
+      expect(await isEligible('rem_test_2350', at0000)).toBe(true);
+      expect(await isEligible('rem_test_2350', at0030)).toBe(false);
+    });
+
     it('delivers a time skipped by the spring daylight-saving change', async () => {
       // 02:15 doesn't exist in Denver on 2027-03-14; the 03:00 run catches up.
       await seedUser('rem_test_dst_gap', {
@@ -386,6 +411,17 @@ describeIfEnv('Reminder delivery integration', () => {
       await seedUser('rem_test_bad_enabled', {
         notifications: { reminders: { enabled: 'maybe' } },
       });
+      await seedUser('rem_test_impossible_date', {
+        notifications: {
+          reminders: { enabled: true, enabled_at: '2026-02-30T00:00:00Z' },
+        },
+      });
+      await seedUser('rem_test_bad_offset', {
+        notifications: {
+          reminders: { enabled: true, enabled_at: '2026-01-01T00:00:00+99:99' },
+        },
+      });
+      await seedUser('rem_test_lowercase_tz', { timezone: 'america/denver' });
       await seedUser('rem_test_bad_custom_time', {
         notifications: {
           reminders: {
@@ -407,6 +443,10 @@ describeIfEnv('Reminder delivery integration', () => {
           'rem_test_bad_enabled_at',
           'rem_test_bad_enabled',
           'rem_test_bad_custom_time',
+          'rem_test_impossible_date',
+          'rem_test_bad_offset',
+          // Postgres reads zone names case-insensitively
+          'rem_test_lowercase_tz',
         ]),
       );
       // Unknown timezone → UTC, where it's 01:00, so not now
@@ -452,6 +492,17 @@ describeIfEnv('Reminder delivery integration', () => {
           .where(eq(pushTickets.userId, 'rem_test_send_ok')),
       );
       expect(tickets).toHaveLength(1);
+    });
+
+    it('sends once when a later or overlapping run picks the user again', async () => {
+      await seedUser('rem_test_send_twice');
+      const before = expo.sentTo.length;
+
+      await sendOne('rem_test_send_twice');
+      await sendOne('rem_test_send_twice');
+
+      expect(expo.sentTo.length - before).toBe(1);
+      expect(await logRows('rem_test_send_twice')).toHaveLength(1);
     });
 
     it('does not log a reminder no device accepted, and drops the dead token', async () => {

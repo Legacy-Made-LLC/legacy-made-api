@@ -9,6 +9,7 @@ describe('ReminderSchedulerService', () => {
   let mockPreferencesService: any;
   let mockPushNotifications: any;
   let mockTx: any;
+  let claimRows: { id: string }[];
 
   beforeEach(async () => {
     mockPreferencesService = {
@@ -19,9 +20,14 @@ describe('ReminderSchedulerService', () => {
       sendToUser: jest.fn().mockResolvedValue({ tokens: 1, accepted: 1 }),
     };
 
+    // execute: advisory lock, then the claim insert (returns the claim id)
+    claimRows = [{ id: 'claim-1' }];
     mockTx = {
-      insert: jest.fn().mockReturnThis(),
-      values: jest.fn().mockReturnThis(),
+      execute: jest
+        .fn()
+        .mockImplementation(() => Promise.resolve({ rows: claimRows })),
+      delete: jest.fn().mockReturnThis(),
+      where: jest.fn().mockResolvedValue([]),
     };
 
     const mockDbService = {
@@ -48,52 +54,39 @@ describe('ReminderSchedulerService', () => {
   });
 
   describe('sendReminders', () => {
-    it('should send to all eligible users returned by the query', async () => {
-      mockPreferencesService.getEligibleReminderUsers.mockResolvedValue([
-        { userId: 'user_1', timezone: 'UTC', notifications: {} },
-        { userId: 'user_2', timezone: 'UTC', notifications: {} },
-      ]);
+    const eligible = (...userIds: string[]) =>
+      mockPreferencesService.getEligibleReminderUsers.mockResolvedValue(
+        userIds.map((userId) => ({
+          userId,
+          timezone: 'UTC',
+          notifications: {},
+        })),
+      );
+
+    it('should claim and send for every eligible user', async () => {
+      eligible('user_1', 'user_2');
 
       await service.sendReminders();
 
       expect(mockPushNotifications.sendToUser).toHaveBeenCalledTimes(2);
-      expect(mockTx.insert).toHaveBeenCalledTimes(2);
+      // lock + claim insert per user
+      expect(mockTx.execute).toHaveBeenCalledTimes(4);
+      expect(mockTx.delete).not.toHaveBeenCalled();
     });
 
     it('should do nothing when no users are eligible', async () => {
       await service.sendReminders();
 
       expect(mockPushNotifications.sendToUser).not.toHaveBeenCalled();
-      expect(mockTx.insert).not.toHaveBeenCalled();
+      expect(mockTx.execute).not.toHaveBeenCalled();
     });
 
-    it('should continue processing remaining users when one fails', async () => {
-      mockPreferencesService.getEligibleReminderUsers.mockResolvedValue([
-        { userId: 'user_1', timezone: 'UTC', notifications: {} },
-        { userId: 'user_2', timezone: 'UTC', notifications: {} },
-      ]);
-
-      // First user's push send throws, second user succeeds
-      mockPushNotifications.sendToUser
-        .mockRejectedValueOnce(new Error('Push failed'))
-        .mockResolvedValueOnce({ tokens: 1, accepted: 1 });
-
-      await service.sendReminders();
-
-      // Both users attempted; only the successful one is logged
-      expect(mockPushNotifications.sendToUser).toHaveBeenCalledTimes(2);
-      expect(mockTx.insert).toHaveBeenCalledTimes(1);
-    });
-
-    it('should send the push before writing the log row', async () => {
-      mockPreferencesService.getEligibleReminderUsers.mockResolvedValue([
-        { userId: 'user_1', timezone: 'UTC', notifications: {} },
-      ]);
-
+    it('should claim the slot before sending', async () => {
+      eligible('user_1');
       const callOrder: string[] = [];
-      mockTx.insert.mockImplementation(() => {
-        callOrder.push('insert');
-        return mockTx;
+      mockTx.execute.mockImplementation(() => {
+        callOrder.push('claim');
+        return Promise.resolve({ rows: claimRows });
       });
       mockPushNotifications.sendToUser.mockImplementation(() => {
         callOrder.push('push');
@@ -102,13 +95,20 @@ describe('ReminderSchedulerService', () => {
 
       await service.sendReminders();
 
-      expect(callOrder).toEqual(['push', 'insert']);
+      expect(callOrder).toEqual(['claim', 'claim', 'push']);
     });
 
-    it('should not log a reminder Expo accepted for no device', async () => {
-      mockPreferencesService.getEligibleReminderUsers.mockResolvedValue([
-        { userId: 'user_1', timezone: 'UTC', notifications: {} },
-      ]);
+    it('should skip a user whose slot is already claimed', async () => {
+      eligible('user_1');
+      claimRows = [];
+
+      await service.sendReminders();
+
+      expect(mockPushNotifications.sendToUser).not.toHaveBeenCalled();
+    });
+
+    it('should release the claim when Expo accepted it for no device', async () => {
+      eligible('user_1');
       mockPushNotifications.sendToUser.mockResolvedValue({
         tokens: 0,
         accepted: 0,
@@ -116,7 +116,19 @@ describe('ReminderSchedulerService', () => {
 
       await service.sendReminders();
 
-      expect(mockTx.insert).not.toHaveBeenCalled();
+      expect(mockTx.delete).toHaveBeenCalledTimes(1);
+    });
+
+    it('should release the claim and continue when a send throws', async () => {
+      eligible('user_1', 'user_2');
+      mockPushNotifications.sendToUser
+        .mockRejectedValueOnce(new Error('Push failed'))
+        .mockResolvedValueOnce({ tokens: 1, accepted: 1 });
+
+      await service.sendReminders();
+
+      expect(mockPushNotifications.sendToUser).toHaveBeenCalledTimes(2);
+      expect(mockTx.delete).toHaveBeenCalledTimes(1);
     });
   });
 });
