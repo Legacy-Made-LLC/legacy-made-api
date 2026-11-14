@@ -14,7 +14,8 @@ const REDACTION_RULES: ReadonlyArray<[RegExp, string]> = [
   [/(\/files\/share\/)[^/?#\s"]+/g, '$1[token]'],
   [/(\/access-invitations\/)[^/?#\s"]+/g, '$1[token]'],
   // Expo push tokens, which Expo echoes in its error and receipt messages.
-  [/Expo(nent)?PushToken\[[^\]]*\]/g, 'ExpoPushToken[redacted]'],
+  // `[^\][]` stops each scan at the next bracket, keeping it linear.
+  [/Expo(nent)?PushToken\[[^\][]*\]/g, 'ExpoPushToken[redacted]'],
   // Email addresses, plain or percent-encoded (as in query strings).
   // Bounded lengths keep this linear on long text with no "@" in it.
   [/[A-Z0-9._%+-]{1,64}(@|%40)[A-Z0-9.-]{1,253}\.[A-Z]{2,}/gi, '[email]'],

@@ -125,9 +125,12 @@ describe('redactText', () => {
 });
 
 describe('redactText performance', () => {
-  it('stays fast on long text with no email in it', () => {
+  it.each([
+    ['no email', 'a'.repeat(200_000)],
+    ['unclosed Expo tokens', 'ExpoPushToken['.repeat(15_000)],
+  ])('stays fast on long text with %s', (_label, input) => {
     const started = Date.now();
-    redactText('a'.repeat(200_000));
+    redactText(input);
     expect(Date.now() - started).toBeLessThan(500);
   });
 });
