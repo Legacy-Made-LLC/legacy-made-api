@@ -39,7 +39,7 @@ export const TIER_CONFIG: Record<SubscriptionTier, TierConfig> = {
     quotas: {
       entries: -1, // Unlimited Important Information
       wishes: -1, // Unlimited wishes
-      trusted_contacts: 1, // 1 trusted contact (view-only)
+      trusted_contacts: 3, // e.g. a spouse plus two adult children
       family_profiles: 0, // No additional family profiles
       legacy_messages: -1, // Unlimited legacy messages
       storage_mb: 500, // Document & media uploads
