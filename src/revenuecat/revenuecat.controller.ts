@@ -91,7 +91,7 @@ export class RevenuecatController {
           outcome: 'error',
           durationMs: Date.now() - startedAt,
         },
-        err instanceof Error ? err.stack : undefined,
+        err,
       );
       throw err;
     }

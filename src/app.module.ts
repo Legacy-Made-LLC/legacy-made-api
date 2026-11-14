@@ -1,7 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
+import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
+import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
 import { RequestContextInterceptor } from './lib/request-context.interceptor';
@@ -32,6 +33,7 @@ import { RevenuecatModule } from './revenuecat/revenuecat.module';
 
 @Module({
   imports: [
+    SentryModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
@@ -76,6 +78,11 @@ import { RevenuecatModule } from './revenuecat/revenuecat.module';
     RevenuecatModule,
   ],
   providers: [
+    // Reports unhandled exceptions; must stay the first exception filter.
+    {
+      provide: APP_FILTER,
+      useClass: SentryGlobalFilter,
+    },
     {
       provide: APP_PIPE,
       useClass: ZodValidationPipe,

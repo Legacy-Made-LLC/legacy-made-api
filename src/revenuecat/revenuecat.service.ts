@@ -119,7 +119,7 @@ export class RevenuecatService {
             eventType: event.type,
             appUserId: event.app_user_id,
           },
-          err instanceof Error ? err.stack : undefined,
+          err,
         );
       }
     }

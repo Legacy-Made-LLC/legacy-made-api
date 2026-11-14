@@ -8,6 +8,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import * as Sentry from '@sentry/nestjs';
 import type { Request as ExpressRequest } from 'express';
 import { ApiClsService } from 'src/lib/api-cls.service';
 import { CLERK_CLIENT } from 'src/lib/clerk/client';
@@ -63,6 +64,8 @@ export class AuthGuard implements CanActivate {
     const auth = toAuth();
     if (auth !== null) {
       this.cls.set('userId', auth.userId);
+      // Clerk ID only; no email or name leaves for Sentry.
+      Sentry.setUser({ id: auth.userId });
     }
 
     return true;
